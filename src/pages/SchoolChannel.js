@@ -27,7 +27,7 @@ function SchoolChannel() {
   };
 
   return (
-    <div className="bg-white min-h-screen">
+    <div className="bg-[#F9FBE7] min-h-screen">
       <Navbar />
       <div className="p-8">
         <h2 className="text-3xl font-bold text-[#2E7D32] mb-4">

@@ -5,7 +5,6 @@ function Navbar() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // 현재 경로와 버튼 경로가 같으면 active 상태
   const navItems = [
     { path: "/school-channel", label: "메인화면" },
     { path: "/school-setting", label: "학교 환경 설정" },
@@ -15,7 +14,7 @@ function Navbar() {
   ];
 
   return (
-    <nav className="flex space-x-3 p-4">
+    <nav className="flex justify-center space-x-3 p-4">
       {navItems.map((item) => {
         const isActive = location.pathname === item.path;
         return (

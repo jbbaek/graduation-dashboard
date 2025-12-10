@@ -5,16 +5,17 @@ function Main() {
   const navigate = useNavigate();
 
   return (
-    <div className="flex flex-col items-center justify-center h-screen bg-gray-50 space-y-4">
+    <div className="flex flex-col items-center justify-center h-screen bg-gray-50 space-y-6">
       <button
         onClick={() => navigate("/create-channel")}
-        className="w-64 bg-[#FBC02D] hover:bg-yellow-500 text-white font-bold py-2 rounded-lg shadow"
+        className="w-96 bg-[#FBC02D] hover:bg-yellow-500 text-white text-xl font-bold py-6 rounded-xl shadow"
       >
         채널 생성하기
       </button>
+
       <button
         onClick={() => navigate("/join-channel")}
-        className="w-64 bg-green-600 hover:bg-green-700 text-white font-bold py-2 rounded-lg shadow"
+        className="w-96 bg-green-600 hover:bg-green-700 text-white text-xl font-bold py-6 rounded-xl shadow"
       >
         채널 들어가기
       </button>

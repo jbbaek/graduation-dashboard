@@ -12,6 +12,7 @@ import SchoolSetting from "./pages/SchoolSetting";
 import ScenarioManagement from "./pages/ScenarioManagement";
 import Monitoring from "./pages/Monitoring";
 import AnalysisResult from "./pages/AnalysisResult";
+import RoomList from "./pages/RoomList";
 
 function App() {
   return (
@@ -28,6 +29,7 @@ function App() {
         <Route path="/scenario" element={<ScenarioManagement />} />
         <Route path="/monitoring" element={<Monitoring />} />
         <Route path="/analysis" element={<AnalysisResult />} />
+        <Route path="/room-list" element={<RoomList />} />
       </Routes>
     </Router>
   );
