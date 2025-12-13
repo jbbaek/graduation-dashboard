@@ -3,7 +3,8 @@ import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE =
+  "https://disaster-ar-backend-a7bvfvd8f6bxbsfh.koreacentral-01.azurewebsites.net"; // ✅ 끝 / 제거
 
 function CreateChannel() {
   const [schoolName, setSchoolName] = useState("");
@@ -11,7 +12,8 @@ function CreateChannel() {
   const navigate = useNavigate();
 
   const handleCreate = async () => {
-    if (!schoolName.trim()) {
+    const trimmed = schoolName.trim();
+    if (!trimmed) {
       alert("학교 이름을 입력해 주세요.");
       return;
     }
@@ -19,47 +21,62 @@ function CreateChannel() {
     try {
       setLoading(true);
 
-      // 1) 채널 생성 요청 (지도 파일은 현재 UI에 없으므로 생략)
+      // ✅ 백엔드 스펙: POST /api/channels
+      // mapFile UI는 없으니 전송하지 않음(선택 필드일 때)
       const formData = new FormData();
-      formData.append("school_name", schoolName);
+      formData.append("schoolName", trimmed);
 
-      const createRes = await axios.post(
-        `${API_BASE}/api/channel/create`,
-        formData,
-        {
-          headers: { "Content-Type": "multipart/form-data" },
-        }
-      );
+      const res = await axios.post(`${API_BASE}/api/channels`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 10000,
+        validateStatus: () => true, // 4xx/5xx도 res로 받기
+      });
 
-      const createData = createRes.data;
-      if (createData.status !== "success") {
-        alert(createData.message || "채널 생성에 실패했습니다.");
+      // 실패 처리
+      if (!(res.status >= 200 && res.status < 300)) {
+        const msg =
+          res.data?.message ||
+          res.data?.detail ||
+          (typeof res.data === "string" ? res.data : null) ||
+          `채널 생성 실패 (${res.status})`;
+        alert(msg);
         return;
       }
 
-      const schoolId = createData.school_id;
+      // ✅ 성공 응답(예상): { id, schoolName, mapFile, accessCode }
+      const data = res.data || {};
+      const channelId = data.id;
+      const accessCode = data.accessCode;
 
-      // 2) 학교 코드 조회
-      let joinCode = "UNKNOWN";
-      try {
-        const codeRes = await axios.get(
-          `${API_BASE}/api/school-channel/${schoolId}`
+      // 혹시 응답 키가 다를 수 있으니 최소한으로 안전하게 처리
+      if (!channelId) {
+        alert(
+          `채널은 생성된 것 같은데 id가 응답에 없습니다.\n\n${JSON.stringify(
+            data,
+            null,
+            2
+          )}`
         );
-        joinCode = codeRes.data.join_code || joinCode;
-      } catch (err) {
-        console.warn("학교 코드 조회 실패, 임시 코드 사용:", err);
+        return;
       }
 
-      // 3) room-list로 이동 (프론트는 기존대로 schoolName + schoolCode 사용)
+      // ✅ 화면에 mapFile은 보여줄 필요 없으니 state에 안 넣고,
+      // 필요한 값만 들고 이동
       navigate("/room-list", {
         state: {
-          schoolName,
-          schoolCode: joinCode,
-          schoolId,
+          channelId,
+          schoolName: data.schoolName ?? trimmed,
+          accessCode: accessCode ?? "UNKNOWN",
         },
       });
     } catch (err) {
       console.error(err);
+
+      if (err.code === "ECONNABORTED") {
+        alert("요청 시간이 초과되었습니다. (timeout)");
+        return;
+      }
+
       alert("서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.");
     } finally {
       setLoading(false);

@@ -1,28 +1,50 @@
-import React, { useState, useEffect } from "react";
+// pages/ScenarioManagement.jsx
+import React, { useEffect, useMemo, useState } from "react";
 import Navbar from "../components/Navbar";
 import axios from "axios";
+import { useLocation } from "react-router-dom";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE =
+  "https://disaster-ar-backend-a7bvfvd8f6bxbsfh.koreacentral-01.azurewebsites.net";
 
 // 재난 유형별 팀 구성 매핑
 const TEAM_TYPES_BY_DISASTER = {
   지진: ["시민팀", "팀1", "팀2"],
-  화재: ["진화팀", "대피팀", "구조팀"],
+  화재: ["소화팀", "응급처치팀", "시민팀"],
 };
 
 // 재난 유형별 발생 설정 라벨/옵션 설정
 const OCCUR_CONFIG = {
-  지진: {
-    locationLabel: "지진 피해 위치",
-    intensityLabel: "지진 강도",
-  },
-  화재: {
-    locationLabel: "화재 발생 위치",
-    intensityLabel: "화재 강도",
-  },
+  지진: { locationLabel: "지진 피해 위치", intensityLabel: "지진 강도" },
+  화재: { locationLabel: "화재 발생 위치", intensityLabel: "화재 강도" },
 };
 
 function ScenarioManagement() {
+  const location = useLocation();
+
+  // ✅ fallback 절대 금지
+  const classroomId = useMemo(() => {
+    return (
+      location.state?.classroomId ||
+      location.state?.roomId ||
+      location.state?.classroomID ||
+      null
+    );
+  }, [location.state]);
+
+  const authHeaders = useMemo(() => {
+    const token = localStorage.getItem("token");
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }, []);
+
+  // ====== 시나리오 목록 ======
+  const [scenarioList, setScenarioList] = useState([]);
+  const [listLoading, setListLoading] = useState(false);
+
+  // 선택된 시나리오(수정 대상)
+  const [selectedScenarioId, setSelectedScenarioId] = useState(null);
+  const [scenarioName, setScenarioName] = useState("");
+
   // 재난 선택
   const [disasterType, setDisasterType] = useState("지진");
 
@@ -53,20 +75,16 @@ function ScenarioManagement() {
   const npcPositions = ["입구", "복도", "계단", "출구"];
   const npcStatuses = ["정상", "이상", "대기"];
 
-  // 현재 선택된 재난 기준 팀 리스트
   const teamTypes = TEAM_TYPES_BY_DISASTER[disasterType] || [
     "팀A",
     "팀B",
     "팀C",
   ];
-
-  // 현재 선택된 재난 기준 발생 설정 라벨
   const occurConfig = OCCUR_CONFIG[disasterType] || {
     locationLabel: "발생 위치",
     intensityLabel: "강도",
   };
 
-  // 자동 설정 lock 여부 체크
   const isAllAuto =
     fireSetting === "자동설정" &&
     teamSetting === "자동설정" &&
@@ -86,9 +104,7 @@ function ScenarioManagement() {
   useEffect(() => {
     setTeamCounts((prev) => {
       const next = {};
-      teamTypes.forEach((team) => {
-        next[team] = prev[team] || "";
-      });
+      teamTypes.forEach((team) => (next[team] = prev[team] || ""));
       return next;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -96,75 +112,321 @@ function ScenarioManagement() {
 
   const handleTeamCountChange = (team, value) => {
     const onlyNumber = value.replace(/[^0-9]/g, "");
-    setTeamCounts((prev) => ({
-      ...prev,
-      [team]: onlyNumber,
-    }));
+    setTeamCounts((prev) => ({ ...prev, [team]: onlyNumber }));
   };
 
-  // 🔥 시나리오 저장 → POST /api/scenario
-  const handleSaveScenario = async () => {
+  const intensityMap = { 약: 3, 보통: 5, 강: 7 };
+
+  const makePayload = (
+    { includeScenarioId } = { includeScenarioId: false }
+  ) => {
+    const scenarioType = disasterType === "화재" ? "FIRE" : "EARTHQUAKE";
+    const triggerMode = fireSetting === "자동설정" ? "AUTO" : "MANUAL";
+    const teamMode = teamSetting === "자동설정" ? "AUTO" : "MANUAL";
+    const npcMode = npcSetting === "자동설정" ? "AUTO" : "MANUAL";
+
+    const intensity = intensityMap[fireIntensity] || 0;
+    const trainTime = trainingTime
+      ? parseInt(trainingTime.replace("분", ""), 10)
+      : 0;
+
+    const teamAssignment = JSON.stringify(teamCounts || {});
+    const npcPositionsJson = JSON.stringify({
+      position: npcPosition || "",
+      status: npcStatus || "",
+    });
+
+    const participantCount =
+      parseInt(String(participants).replace(/[^0-9]/g, ""), 10) || 0;
+
+    const base = {
+      classroomId,
+      scenarioName: scenarioName?.trim() || `${disasterType} 시나리오`,
+      scenarioType,
+      triggerMode,
+      teamMode,
+      npcMode,
+      location: fireLocation || "",
+      intensity,
+      trainTime,
+      teamAssignment,
+      npcPositions: npcPositionsJson,
+      participantCount,
+    };
+
+    if (includeScenarioId) return { ...base, scenarioId: selectedScenarioId };
+    return base;
+  };
+
+  const showAxiosError = (title, errOrRes) => {
+    if (errOrRes?.status) {
+      alert(
+        `${title} (${errOrRes.status})\n\n` +
+          (typeof errOrRes.data === "string"
+            ? errOrRes.data
+            : JSON.stringify(errOrRes.data, null, 2))
+      );
+      return;
+    }
+    alert(`${title}\n\n${errOrRes?.message || "알 수 없는 오류"}`);
+  };
+
+  // ✅ 목록 조회
+  const fetchScenarioList = async () => {
+    if (!classroomId) {
+      setScenarioList([]);
+      return;
+    }
+
+    try {
+      setListLoading(true);
+
+      const res = await axios.get(
+        `${API_BASE}/api/scenarios/classroom/${classroomId}`,
+        {
+          headers: { ...authHeaders },
+          timeout: 10000,
+          validateStatus: () => true,
+        }
+      );
+
+      if (!(res.status >= 200 && res.status < 300)) {
+        setScenarioList([]);
+        showAxiosError("시나리오 목록 조회 실패", res);
+        return;
+      }
+
+      setScenarioList(Array.isArray(res.data) ? res.data : []);
+    } catch (err) {
+      console.error(err);
+      setScenarioList([]);
+      showAxiosError("시나리오 목록 조회 중 오류", err);
+    } finally {
+      setListLoading(false);
+    }
+  };
+
+  // ✅ 생성
+  const handleCreateScenario = async () => {
+    if (!classroomId) {
+      alert(
+        "classroomId를 못 넘겨받았습니다. SchoolChannel에서 들어와야 합니다."
+      );
+      return;
+    }
+
     try {
       setSaving(true);
 
-      // 현재는 classroom_id를 하드코딩 (나중에 반 선택 시 교체)
-      const classroomId = "c001";
+      const payload = makePayload({ includeScenarioId: false });
+      const res = await axios.post(`${API_BASE}/api/scenarios`, payload, {
+        headers: { "Content-Type": "application/json", ...authHeaders },
+        timeout: 10000,
+        validateStatus: () => true,
+      });
 
-      const scenarioType = disasterType === "화재" ? "FIRE" : "EARTHQUAKE"; // 프론트 기준 확장
-
-      const triggerMode = fireSetting === "자동설정" ? "AUTO" : "MANUAL";
-      const teamMode = teamSetting === "자동설정" ? "AUTO" : "MANUAL";
-      const npcMode = npcSetting === "자동설정" ? "AUTO" : "MANUAL";
-
-      // 강도 매핑 (프론트 기준 하드코딩)
-      const intensityMap = { 약: 3, 보통: 5, 강: 7 };
-      const intensity = intensityMap[fireIntensity] || 0;
-
-      // "10분" → 10 정수
-      const trainTime = trainingTime
-        ? parseInt(trainingTime.replace("분", ""), 10)
-        : 0;
-
-      const payload = {
-        classroom_id: classroomId,
-        scenario_type: scenarioType,
-        trigger_mode: triggerMode,
-        team_mode: teamMode,
-        npc_mode: npcMode,
-        intensity,
-        train_time: trainTime,
-        // 필요하면 아래처럼 프론트 전용 필드도 함께 보낼 수 있음
-        // fire_location: fireLocation,
-        // npc_position: npcPosition,
-        // npc_status: npcStatus,
-        // participants: Number(participants || 0),
-        // team_counts: teamCounts,
-      };
-
-      const res = await axios.post(`${API_BASE}/api/scenario`, payload);
-      const data = res.data;
-
-      if (data.status === "success") {
-        alert("시나리오가 저장되었습니다.");
-        // 필요하면 scenario_id(data.scenario_id) 로 상태 업데이트
-      } else {
-        alert(data.message || "시나리오 저장에 실패했습니다.");
+      if (!(res.status >= 200 && res.status < 300)) {
+        showAxiosError("시나리오 생성 실패", res);
+        return;
       }
+
+      alert("✅ 시나리오가 생성되었습니다.");
+      await fetchScenarioList();
     } catch (err) {
       console.error(err);
-      alert("서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.");
+      showAxiosError("시나리오 생성 중 오류", err);
     } finally {
       setSaving(false);
     }
   };
 
+  // ✅ 수정
+  const handleUpdateScenario = async () => {
+    if (!classroomId) {
+      alert(
+        "classroomId를 못 넘겨받았습니다. SchoolChannel에서 들어와야 합니다."
+      );
+      return;
+    }
+    if (!selectedScenarioId) {
+      alert("수정할 시나리오를 먼저 선택해 주세요.");
+      return;
+    }
+
+    try {
+      setSaving(true);
+
+      const payload = makePayload({ includeScenarioId: true });
+
+      let res = await axios.put(`${API_BASE}/api/scenarios`, payload, {
+        headers: { "Content-Type": "application/json", ...authHeaders },
+        timeout: 10000,
+        validateStatus: () => true,
+      });
+
+      if (res.status === 405) {
+        res = await axios.patch(`${API_BASE}/api/scenarios`, payload, {
+          headers: { "Content-Type": "application/json", ...authHeaders },
+          timeout: 10000,
+          validateStatus: () => true,
+        });
+      }
+
+      if (!(res.status >= 200 && res.status < 300)) {
+        showAxiosError("시나리오 수정 실패", res);
+        return;
+      }
+
+      alert("✅ 시나리오가 수정되었습니다.");
+      await fetchScenarioList();
+    } catch (err) {
+      console.error(err);
+      showAxiosError("시나리오 수정 중 오류", err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // ✅ 선택 시 폼에 채우기
+  const handlePickScenario = (s) => {
+    setSelectedScenarioId(s.id);
+    setScenarioName(s.scenarioName || "");
+
+    setDisasterType(s.scenarioType === "FIRE" ? "화재" : "지진");
+
+    setFireSetting(s.triggerMode === "MANUAL" ? "수동설정" : "자동설정");
+    setTeamSetting(s.teamMode === "MANUAL" ? "수동설정" : "자동설정");
+    setNpcSetting(s.npcMode === "MANUAL" ? "수동설정" : "자동설정");
+
+    setFireLocation(s.location || "");
+
+    const invIntensity =
+      s.intensity >= 7
+        ? "강"
+        : s.intensity >= 5
+        ? "보통"
+        : s.intensity >= 3
+        ? "약"
+        : "";
+    setFireIntensity(invIntensity);
+
+    setTrainingTime(s.trainTime ? `${s.trainTime}분` : "");
+
+    try {
+      const ta = s.teamAssignmentJson ? JSON.parse(s.teamAssignmentJson) : {};
+      setTeamCounts(ta && typeof ta === "object" ? ta : {});
+    } catch {
+      setTeamCounts({});
+    }
+
+    try {
+      const np = s.npcPositionsJson ? JSON.parse(s.npcPositionsJson) : {};
+      setNpcPosition(np?.position || "");
+      setNpcStatus(np?.status || "");
+    } catch {
+      setNpcPosition("");
+      setNpcStatus("");
+    }
+
+    setParticipants(String(s.participantCount ?? 0));
+  };
+
+  useEffect(() => {
+    if (classroomId) fetchScenarioList();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [classroomId]);
+
   return (
     <div className="bg-[#F9FBE7] min-h-screen">
       <Navbar />
       <div className="p-8 space-y-6">
-        <h2 className="text-3xl font-bold text-[#2E7D32] mb-4">
+        <h2 className="text-3xl font-bold text-[#2E7D32] mb-2">
           시나리오 관리
         </h2>
+
+        {!classroomId && (
+          <div className="p-4 bg-white rounded shadow border border-red-200">
+            <p className="text-red-600 font-bold">
+              classroomId를 못 넘겨받았습니다.
+            </p>
+            <p className="text-sm text-gray-600 mt-1">
+              RoomList → SchoolChannel → 시나리오 관리 버튼으로 들어와야 합니다.
+            </p>
+          </div>
+        )}
+
+        {/* 시나리오 목록 */}
+        <div className="p-4 bg-white rounded shadow space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-semibold text-[#2E7D32]">
+              시나리오 목록
+            </h3>
+            <button
+              onClick={fetchScenarioList}
+              disabled={listLoading || !classroomId}
+              className="px-4 py-2 bg-[#66BB6A] text-white rounded-lg shadow hover:bg-[#2E7D32] disabled:opacity-60"
+            >
+              {listLoading ? "불러오는 중..." : "새로고침"}
+            </button>
+          </div>
+
+          {listLoading && (
+            <p className="text-sm text-gray-500">목록 불러오는 중...</p>
+          )}
+
+          {!listLoading && classroomId && scenarioList.length === 0 && (
+            <p className="text-sm text-gray-500">
+              아직 저장된 시나리오가 없습니다.
+            </p>
+          )}
+
+          {!listLoading && scenarioList.length > 0 && (
+            <div className="space-y-2">
+              {scenarioList.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => handlePickScenario(s)}
+                  className={`w-full text-left px-4 py-3 rounded-lg border ${
+                    selectedScenarioId === s.id
+                      ? "border-[#2E7D32] bg-[#E8F5E9]"
+                      : "border-gray-200 bg-white hover:bg-gray-50"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="font-bold">
+                      {s.scenarioName || "(이름 없음)"}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {s.createdTime
+                        ? new Date(s.createdTime).toLocaleString()
+                        : ""}
+                    </div>
+                  </div>
+                  <div className="text-sm text-gray-700 mt-1">
+                    타입: {s.scenarioType} / 모드: {s.triggerMode},{s.teamMode},
+                    {s.npcMode}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* 시나리오 이름 */}
+        <div className="p-4 bg-white rounded shadow space-y-3">
+          <h3 className="text-xl font-semibold text-[#2E7D32]">
+            시나리오 이름
+          </h3>
+          <input
+            value={scenarioName}
+            onChange={(e) => setScenarioName(e.target.value)}
+            placeholder="예: 3학년1반 화재훈련 시나리오"
+            className="border px-3 py-2 rounded w-full"
+          />
+          <p className="text-xs text-gray-500">
+            수정은 목록에서 시나리오를 선택한 뒤 저장하세요.
+          </p>
+        </div>
 
         {/* 재난 선택하기 */}
         <div className="p-4 bg-white rounded shadow space-y-3">
@@ -374,14 +636,22 @@ function ScenarioManagement() {
           />
         </div>
 
-        {/* 저장 버튼 */}
-        <div className="mt-4">
+        {/* 저장 버튼들 */}
+        <div className="mt-4 flex flex-wrap gap-3">
           <button
-            onClick={handleSaveScenario}
-            disabled={saving}
+            onClick={handleCreateScenario}
+            disabled={saving || !classroomId}
             className="px-6 py-3 bg-[#2E7D32] text-white rounded-lg shadow disabled:opacity-60"
           >
-            {saving ? "저장 중..." : "시나리오 저장"}
+            {saving ? "처리 중..." : "시나리오 생성"}
+          </button>
+
+          <button
+            onClick={handleUpdateScenario}
+            disabled={saving || !selectedScenarioId || !classroomId}
+            className="px-6 py-3 bg-[#66BB6A] text-white rounded-lg shadow disabled:opacity-60"
+          >
+            {saving ? "처리 중..." : "선택 시나리오 수정"}
           </button>
         </div>
       </div>
