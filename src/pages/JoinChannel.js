@@ -1,10 +1,101 @@
 import React, { useState } from "react";
+import axios from "axios";
+import { useNavigate } from "react-router-dom";
+
+const API_BASE =
+  "https://disaster-ar-backend-a7bvfvd8f6bxbsfh.koreacentral-01.azurewebsites.net";
 
 function JoinChannel() {
   const [code, setCode] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
 
-  const handleJoin = () => {
-    console.log("입력 코드:", code);
+  const navigate = useNavigate();
+
+  const handleJoin = async () => {
+    const channelCode = code.trim();
+    if (!channelCode) {
+      setErrorMsg("학교 코드를 입력하세요.");
+      return;
+    }
+
+    setLoading(true);
+    setErrorMsg("");
+
+    try {
+      const token = localStorage.getItem("token");
+
+      const res = await axios.post(
+        `${API_BASE}/api/channels/join-school`,
+        { channelCode }, // ✅ 백엔드 스펙 그대로
+        {
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          timeout: 10000,
+          validateStatus: () => true, // 4xx/5xx도 res로 받기
+        }
+      );
+
+      // 실패 처리
+      if (!(res.status >= 200 && res.status < 300)) {
+        const msg =
+          res.data?.message ||
+          res.data?.detail ||
+          (typeof res.data === "string" ? res.data : null) ||
+          `입장 실패 (${res.status})`;
+        setErrorMsg(msg);
+        return;
+      }
+
+      console.log("입장 성공:", res.data);
+
+      const data = res.data || {};
+
+      // ✅ 백엔드 응답 키가 제각각일 수 있어서 후보를 넓게 잡음
+      const channelId =
+        data.id ?? data.channelId ?? data.schoolId ?? data.school_id ?? null;
+
+      const schoolName =
+        data.schoolName ?? data.school_name ?? data.name ?? "학교";
+
+      // CreateChannel은 accessCode를 넘김 → Join도 동일하게 맞춤
+      const accessCode =
+        data.accessCode ??
+        data.joinCode ??
+        data.channelCode ??
+        channelCode ??
+        "UNKNOWN";
+
+      // ✅ CreateChannel과 동일한 키로 state 전달
+      // (RoomList/SchoolChannel이 이 키들을 읽는 구조일 가능성이 높음)
+      navigate("/room-list", {
+        state: {
+          channelId,
+          schoolName,
+          accessCode,
+          // 혹시 기존 코드가 joinCode를 읽는 경우도 있으니 같이 넣어줌(안전)
+          joinCode: accessCode,
+        },
+      });
+    } catch (err) {
+      console.error("입장 실패:", err);
+
+      if (err.code === "ECONNABORTED") {
+        setErrorMsg("요청 시간이 초과되었습니다. (timeout)");
+        return;
+      }
+
+      const msg =
+        err?.response?.data?.message ||
+        err?.response?.data?.detail ||
+        err?.message ||
+        "입장에 실패했습니다.";
+      setErrorMsg(msg);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -14,18 +105,34 @@ function JoinChannel() {
           코드 입력
         </h2>
         <p className="text-center text-gray-600 mb-6">학교 코드를 입력하세요</p>
+
         <input
           type="text"
           placeholder="학교 코드"
           value={code}
           onChange={(e) => setCode(e.target.value)}
-          className="w-full px-4 py-2 border border-yellow-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-300 mb-6"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") handleJoin();
+          }}
+          className="w-full px-4 py-2 border border-yellow-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-300 mb-3"
         />
+
+        {errorMsg && (
+          <p className="text-sm text-red-600 mb-3 whitespace-pre-line">
+            {errorMsg}
+          </p>
+        )}
+
         <button
           onClick={handleJoin}
-          className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg shadow"
+          disabled={loading}
+          className={`w-full text-white font-bold py-2 px-4 rounded-lg shadow ${
+            loading
+              ? "bg-green-400 cursor-not-allowed"
+              : "bg-green-600 hover:bg-green-700"
+          }`}
         >
-          입장하기
+          {loading ? "입장 중..." : "입장하기"}
         </button>
       </div>
     </div>
