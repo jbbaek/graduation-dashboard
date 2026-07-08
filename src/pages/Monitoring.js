@@ -516,8 +516,8 @@ export default function Monitoring() {
 
     if (matchedBeacon) {
       return {
-        x: Number(matchedBeacon.x || 0),
-        y: Number(matchedBeacon.y || 0),
+        x: Number(matchedBeacon.x || 0) + Number(matchedBeacon.width || 0) / 2,
+        y: Number(matchedBeacon.y || 0) + Number(matchedBeacon.height || 0) / 2,
       };
     }
 

@@ -231,10 +231,12 @@ function AnalysisResult() {
 
   const getStudentKey = (student) => {
     return String(
-      student?.studentId ??
+      student?.evaluationId ??
+        student?.evaluation_id ??
+        student?.studentEvaluationId ??
+        student?.studentId ??
         student?.id ??
         student?.student_id ??
-        student?.evaluationId ??
         "",
     );
   };
@@ -381,20 +383,9 @@ function AnalysisResult() {
 
   // ✅ 평가 결과를 화면 표시용 형태로 변환
   const parsedStudentEvaluations = useMemo(() => {
-    return studentEvaluations
-      .filter((student) => {
-        const rawStudentId =
-          student?.studentId ?? student?.id ?? student?.student_id;
+    const currentScenarioId = String(scenarioId || "");
 
-        if (!rawStudentId) {
-          return true;
-        }
-
-        const studentId = String(rawStudentId);
-
-        // ✅ 퇴출된 것으로 명확히 확인된 학생만 제외
-        return !kickedStudentIdSet.has(studentId);
-      })
+    const normalized = studentEvaluations
       .map((student) => {
         const scoreJson = safeJsonParse(student.scoreJson, {});
         const detailsJson = safeJsonParse(student.detailsJson, {});
@@ -404,8 +395,76 @@ function AnalysisResult() {
           scoreJson,
           detailsJson,
         };
+      })
+      .filter((student) => {
+        const rawStudentId =
+          student?.studentId ?? student?.id ?? student?.student_id;
+
+        if (!rawStudentId) {
+          return false;
+        }
+
+        const studentId = String(rawStudentId);
+
+        // 퇴출 학생 제외
+        if (kickedStudentIdSet.has(studentId)) {
+          return false;
+        }
+
+        // 응답에 scenarioId가 들어있으면 현재 scenarioId와 같은 것만 사용
+        const evaluationScenarioId =
+          student?.scenarioId ??
+          student?.scenario_id ??
+          student?.trainingScenarioId ??
+          student?.scenarioEvaluation?.scenarioId;
+
+        if (
+          evaluationScenarioId !== undefined &&
+          evaluationScenarioId !== null &&
+          String(evaluationScenarioId) !== currentScenarioId
+        ) {
+          return false;
+        }
+
+        return true;
       });
-  }, [studentEvaluations, kickedStudentIdSet]);
+
+    // 같은 학생 평가가 여러 개 있으면 최신 1개만 남김
+    const latestByStudentId = new Map();
+
+    normalized.forEach((student) => {
+      const studentId = String(
+        student?.studentId ?? student?.id ?? student?.student_id,
+      );
+
+      const prev = latestByStudentId.get(studentId);
+
+      if (!prev) {
+        latestByStudentId.set(studentId, student);
+        return;
+      }
+
+      const prevTime = new Date(
+        prev.updatedAt ?? prev.createdAt ?? prev.evaluatedAt ?? 0,
+      ).getTime();
+
+      const currentTime = new Date(
+        student.updatedAt ?? student.createdAt ?? student.evaluatedAt ?? 0,
+      ).getTime();
+
+      if (currentTime >= prevTime) {
+        latestByStudentId.set(studentId, student);
+      }
+    });
+
+    return Array.from(latestByStudentId.values());
+  }, [studentEvaluations, kickedStudentIdSet, scenarioId]);
+
+  const parsedStudentEvaluationKey = useMemo(() => {
+    return parsedStudentEvaluations
+      .map((student) => getStudentKey(student))
+      .join("|");
+  }, [parsedStudentEvaluations]);
 
   // ✅ 시나리오가 변경되면 이전 AI 피드백 초기화
   useEffect(() => {
@@ -428,16 +487,18 @@ function AnalysisResult() {
       return;
     }
 
-    if (autoFeedbackScenarioRef.current === scenarioId) {
+    const feedbackRunKey = `${scenarioId}:${parsedStudentEvaluationKey}`;
+
+    if (autoFeedbackScenarioRef.current === feedbackRunKey) {
       return;
     }
 
-    autoFeedbackScenarioRef.current = scenarioId;
+    autoFeedbackScenarioRef.current = feedbackRunKey;
     generateStudentFeedbacks();
 
     // generateStudentFeedbacks는 현재 평가 결과를 기준으로 한 번만 실행
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scenarioId, parsedStudentEvaluations.length]);
+  }, [scenarioId, parsedStudentEvaluationKey]);
 
   const summaryData = useMemo(() => {
     // ✅ 퇴출 학생 제외 후 남은 학생 수

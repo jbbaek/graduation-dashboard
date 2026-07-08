@@ -218,6 +218,24 @@ function ScenarioManagement() {
     };
   };
 
+  const getDisasterTypeLabel = (scenarioType) => {
+    const type = String(scenarioType || "").toUpperCase();
+
+    if (type === "FIRE") return "화재";
+    if (type === "EARTHQUAKE") return "지진";
+
+    return scenarioType || "-";
+  };
+
+  const getModeLabel = (mode) => {
+    const value = String(mode || "").toUpperCase();
+
+    if (value === "AUTO") return "자동설정";
+    if (value === "MANUAL") return "수동설정";
+
+    return mode || "-";
+  };
+
   const makePayload = (
     { includeScenarioId } = { includeScenarioId: false },
   ) => {
@@ -972,15 +990,14 @@ function ScenarioManagement() {
                         </span>
                       )}
                     </div>
-                    <div className="text-xs text-gray-500">
-                      {s.createdTime
-                        ? new Date(s.createdTime).toLocaleString()
-                        : ""}
-                    </div>
                   </div>
-                  <div className="text-sm text-gray-700 mt-1">
-                    타입: {s.scenarioType} / 모드: {s.triggerMode},{s.teamMode},
-                    {s.npcMode}
+                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-700">
+                    <span>
+                      재난 유형: {getDisasterTypeLabel(s.scenarioType)}
+                    </span>
+                    <span>발생 설정: {getModeLabel(s.triggerMode)}</span>
+                    <span>팀 설정: {getModeLabel(s.teamMode)}</span>
+                    <span>NPC 설정: {getModeLabel(s.npcMode)}</span>
                   </div>
                 </button>
               ))}
