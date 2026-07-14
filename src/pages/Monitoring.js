@@ -38,6 +38,10 @@ export default function Monitoring() {
 
   const [allStudents, setAllStudents] = useState([]);
 
+  // 학생별 전화 미션 상태
+  const [callMissions, setCallMissions] = useState([]);
+  const [judgingStudentId, setJudgingStudentId] = useState("");
+
   const [selectedFloorIndex, setSelectedFloorIndex] = useState(0);
 
   const [selectedMarker, setSelectedMarker] = useState(null);
@@ -133,6 +137,82 @@ export default function Monitoring() {
     }
   };
 
+  const getCallMissionByStudentId = useCallback(
+    (studentId) => {
+      return (
+        callMissions.find(
+          (mission) =>
+            String(mission?.studentId || "") === String(studentId || ""),
+        ) || null
+      );
+    },
+    [callMissions],
+  );
+
+  const getCallMissionStatusText = (status) => {
+    switch (
+      String(status || "")
+        .trim()
+        .toUpperCase()
+    ) {
+      case "SCHEDULED":
+        return "미션 대기";
+
+      case "AVAILABLE":
+        return "시작 가능";
+
+      case "CALLING":
+        return "통화 중";
+
+      case "WAITING_TEACHER_REVIEW":
+        return "교사 판정 대기";
+
+      case "SUCCESS":
+        return "성공";
+
+      case "FAILED":
+        return "실패";
+
+      case "EXPIRED":
+        return "만료";
+
+      default:
+        return "미션 없음";
+    }
+  };
+
+  const getCallMissionStatusClass = (status) => {
+    switch (
+      String(status || "")
+        .trim()
+        .toUpperCase()
+    ) {
+      case "SUCCESS":
+        return "bg-green-100 text-green-700";
+
+      case "FAILED":
+        return "bg-red-100 text-red-700";
+
+      case "WAITING_TEACHER_REVIEW":
+        return "bg-orange-100 text-orange-700";
+
+      case "CALLING":
+        return "bg-blue-100 text-blue-700";
+
+      case "AVAILABLE":
+        return "bg-yellow-100 text-yellow-700";
+
+      case "SCHEDULED":
+        return "bg-gray-100 text-gray-700";
+
+      case "EXPIRED":
+        return "bg-gray-200 text-gray-500";
+
+      default:
+        return "bg-gray-100 text-gray-500";
+    }
+  };
+
   const getSignalText = (rssi) => {
     if (rssi === null || rssi === undefined) {
       return "미감지";
@@ -188,6 +268,25 @@ export default function Monitoring() {
     return response.json();
   }, [classroomId, authHeaders]);
 
+  // 여기에 추가
+  const getActiveScenarioId = useCallback(() => {
+    try {
+      const gameContext = JSON.parse(
+        localStorage.getItem("gameContext") || "{}",
+      );
+
+      return (
+        gameContext?.scenarioId ||
+        gameContext?.activeScenarioId ||
+        localStorage.getItem("activeScenarioId") ||
+        ""
+      );
+    } catch (err) {
+      console.error("활성 시나리오 ID 조회 실패 =", err);
+      return localStorage.getItem("activeScenarioId") || "";
+    }
+  }, []);
+
   // =========================
   // 학생 API
   // =========================
@@ -210,6 +309,36 @@ export default function Monitoring() {
 
     return response.json();
   }, [classroomId, authHeaders]);
+
+  // =========================
+  // 전화 미션 목록 API
+  // =========================
+
+  const fetchCallMissions = useCallback(async () => {
+    const scenarioId = getActiveScenarioId();
+
+    if (!scenarioId) {
+      console.warn("전화 미션 조회: scenarioId가 없습니다.");
+      return [];
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}/api/scenarios/${scenarioId}/call-missions`,
+      {
+        headers: {
+          ...authHeaders,
+        },
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(`call-missions 실패 (${response.status})`);
+    }
+
+    const data = await response.json();
+
+    return Array.isArray(data?.missions) ? data.missions : [];
+  }, [authHeaders, getActiveScenarioId]);
 
   // =========================
   // 구조도 API
@@ -249,15 +378,15 @@ export default function Monitoring() {
 
   const fetchAllData = useCallback(async () => {
     try {
-      // setLoading(true);
-
+      // 주기적으로 갱신할 때 화면 전체 로딩 상태는 켜지 않음
       setError("");
 
-      const [monitoringResult, studentsResult, mapResult] =
+      const [monitoringResult, studentsResult, mapResult, callMissionsResult] =
         await Promise.allSettled([
           fetchMonitoringMap(),
           fetchStudents(),
           fetchMapData(),
+          fetchCallMissions(),
         ]);
 
       // =========================
@@ -269,7 +398,10 @@ export default function Monitoring() {
       if (monitoringResult.status === "fulfilled") {
         monitoring = monitoringResult.value;
       } else {
-        console.warn("monitoring-map 실패 → fallback 사용");
+        console.warn(
+          "monitoring-map 실패 → fallback 사용",
+          monitoringResult.reason,
+        );
       }
 
       // =========================
@@ -336,13 +468,12 @@ export default function Monitoring() {
         monitoring = {
           ...monitoring,
           mapVersionId: monitoring.mapVersionId || mapData.mapVersionId,
-
           floors: mergedFloors,
         };
       }
 
       // =========================
-      // 학생
+      // 학생 목록
       // =========================
 
       let students = [];
@@ -351,19 +482,96 @@ export default function Monitoring() {
         students = Array.isArray(studentsResult.value)
           ? studentsResult.value
           : [];
+      } else {
+        console.warn("학생 목록 조회 실패", studentsResult.reason);
+      }
+
+      // =========================
+      // 전화 미션 목록
+      // =========================
+
+      let missions = [];
+
+      if (callMissionsResult.status === "fulfilled") {
+        missions = Array.isArray(callMissionsResult.value)
+          ? callMissionsResult.value
+          : [];
+      } else {
+        console.warn("전화 미션 목록 조회 실패", callMissionsResult.reason);
       }
 
       setMonitoringData(monitoring);
-
       setAllStudents(students);
-
+      setCallMissions(missions);
       setLastUpdatedAt(new Date().toLocaleTimeString());
     } catch (err) {
-      console.error(err);
+      console.error("[Monitoring] 전체 데이터 조회 오류:", err);
 
-      setError(err.message);
+      setError(
+        err?.message || "모니터링 데이터를 불러오는 중 오류가 발생했습니다.",
+      );
     }
-  }, [fetchMonitoringMap, fetchStudents, fetchMapData]);
+  }, [fetchMonitoringMap, fetchStudents, fetchMapData, fetchCallMissions]);
+
+  const handleJudgeCallMission = async (studentId, success) => {
+    const scenarioId = getActiveScenarioId();
+
+    if (!scenarioId) {
+      alert("현재 활성 시나리오 ID가 없습니다.");
+      return;
+    }
+
+    if (!studentId) {
+      alert("학생 ID가 없습니다.");
+      return;
+    }
+
+    const resultText = success ? "성공" : "실패";
+
+    const confirmed = window.confirm(
+      `이 학생의 전화 미션을 ${resultText} 처리하시겠습니까?`,
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setJudgingStudentId(studentId);
+
+      const response = await fetch(
+        `${API_BASE_URL}/api/scenarios/${scenarioId}` +
+          `/students/${studentId}/call-mission/judge`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json; charset=UTF-8",
+            ...authHeaders,
+          },
+          body: JSON.stringify({
+            success,
+            memo: success ? "신고 내용을 정확히 전달함" : "신고 내용이 부족함",
+          }),
+        },
+      );
+
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(
+          data?.message || `전화 미션 판정 실패 (${response.status})`,
+        );
+      }
+
+      alert(`전화 미션을 ${resultText} 처리했습니다.`);
+
+      await fetchAllData();
+    } catch (err) {
+      console.error("전화 미션 판정 오류 =", err);
+
+      alert(err?.message || "전화 미션 판정 중 오류가 발생했습니다.");
+    } finally {
+      setJudgingStudentId("");
+    }
+  };
 
   // =========================
   // 초기 로드
@@ -1139,11 +1347,31 @@ export default function Monitoring() {
                   <th className="border-b px-4 py-3 text-left font-semibold text-gray-700">
                     마지막 감지
                   </th>
+                  <th className="border-b px-4 py-3 text-left font-semibold text-gray-700">
+                    전화 미션
+                  </th>
+
+                  <th className="border-b px-4 py-3 text-center font-semibold text-gray-700">
+                    전화 미션 판정
+                  </th>
                 </tr>
               </thead>
 
               <tbody>
                 {visibleStudents.map((student) => {
+                  const callMission = getCallMissionByStudentId(
+                    student.studentId,
+                  );
+
+                  const callMissionStatus = String(
+                    callMission?.status || "",
+                  ).toUpperCase();
+
+                  const canJudge =
+                    callMissionStatus === "WAITING_TEACHER_REVIEW";
+
+                  const isJudging = judgingStudentId === student.studentId;
+
                   return (
                     <tr key={student.studentId}>
                       {/* 학생명 */}
@@ -1175,6 +1403,62 @@ export default function Monitoring() {
                       {/* 마지막 감지 */}
                       <td className="border-b px-4 py-3 text-gray-700">
                         {formatTime(student.lastSeenAt)}
+                      </td>
+                      {/* 전화 미션 상태 */}
+                      <td className="border-b px-4 py-3">
+                        <span
+                          className={`inline-block rounded-full px-2 py-1 text-xs font-semibold ${getCallMissionStatusClass(
+                            callMissionStatus,
+                          )}`}
+                        >
+                          {getCallMissionStatusText(callMissionStatus)}
+                        </span>
+
+                        {callMission?.remainingSeconds > 0 && (
+                          <p className="mt-1 text-xs text-gray-500">
+                            {callMission.remainingSeconds}초 후 시작 가능
+                          </p>
+                        )}
+                      </td>
+
+                      {/* 전화 미션 판정 */}
+                      <td className="border-b px-4 py-3">
+                        <div className="flex justify-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleJudgeCallMission(student.studentId, true)
+                            }
+                            disabled={!canJudge || isJudging}
+                            className="rounded-lg bg-green-600 px-3 py-2 text-xs font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            성공
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleJudgeCallMission(student.studentId, false)
+                            }
+                            disabled={!canJudge || isJudging}
+                            className="rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            실패
+                          </button>
+                        </div>
+
+                        {callMissionStatus === "CALLING" && (
+                          <p className="mt-1 text-center text-xs text-gray-500">
+                            학생 통화 완료 대기
+                          </p>
+                        )}
+
+                        {(callMissionStatus === "SUCCESS" ||
+                          callMissionStatus === "FAILED") && (
+                          <p className="mt-1 text-center text-xs text-gray-500">
+                            판정 완료
+                          </p>
+                        )}
                       </td>
                     </tr>
                   );

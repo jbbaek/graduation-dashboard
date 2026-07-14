@@ -93,6 +93,10 @@ function ScenarioManagement() {
 
   const [saving, setSaving] = useState(false);
 
+  // 선생님 전화 미션 설정
+  const [teacherCallEnabled, setTeacherCallEnabled] = useState(false);
+  const [teacherPhoneNumber, setTeacherPhoneNumber] = useState("");
+
   // 드롭다운 옵션
   const fireLocations = Array.from({ length: 10 }, (_, i) => `${i + 1}층`);
   const npcPositions = ["입구", "복도", "계단", "출구"];
@@ -139,6 +143,11 @@ function ScenarioManagement() {
   const handleTrainingTimeChange = (value) => {
     const onlyNumber = value.replace(/[^0-9]/g, "");
     setTrainingTime(onlyNumber);
+  };
+
+  const handleTeacherPhoneNumberChange = (value) => {
+    const onlyNumber = value.replace(/[^0-9]/g, "");
+    setTeacherPhoneNumber(onlyNumber);
   };
 
   const buildManualTeamCounts = () => {
@@ -210,10 +219,18 @@ function ScenarioManagement() {
       location: s?.location ?? "",
       intensity: Number(s?.intensity ?? 0),
       trainTime: Number(s?.trainTime ?? 0),
+
       teamAssignmentJson: s?.teamAssignmentJson ?? s?.teamAssignment ?? "{}",
+
       npcPositionsJson:
         s?.npcPositionsJson ?? s?.npcPositions ?? '{"position":"","status":""}',
+
       participantCount: Number(s?.participantCount ?? 0),
+
+      // 추가
+      teacherCallEnabled: Boolean(s?.teacherCallEnabled),
+      teacherPhoneNumber: s?.teacherPhoneNumber ?? "",
+
       createdTime: s?.createdTime ?? s?.createdAt ?? null,
     };
   };
@@ -258,6 +275,11 @@ function ScenarioManagement() {
       position: npcPosition || "",
       status: npcStatus || "",
     });
+    const normalizedTeacherPhoneNumber = teacherPhoneNumber.replace(
+      /[^0-9]/g,
+      "",
+    );
+
     const base = {
       classroomId,
       scenarioName: scenarioName?.trim() || `${disasterType} 시나리오`,
@@ -270,7 +292,12 @@ function ScenarioManagement() {
       trainTime,
       teamAssignment,
       npcPositions,
-      participantCount: 0,
+      participantCount: activeStudentCount,
+
+      teacherCallEnabled,
+      teacherPhoneNumber: teacherCallEnabled
+        ? normalizedTeacherPhoneNumber
+        : null,
     };
 
     if (includeScenarioId) {
@@ -287,6 +314,9 @@ function ScenarioManagement() {
         teamAssignment: base.teamAssignment,
         npcPositions: base.npcPositions,
         participantCount: base.participantCount,
+
+        teacherCallEnabled: base.teacherCallEnabled,
+        teacherPhoneNumber: base.teacherPhoneNumber,
       };
     }
 
@@ -523,6 +553,20 @@ function ScenarioManagement() {
   };
 
   const handleSaveScenario = async () => {
+    if (teacherCallEnabled) {
+      const phoneNumber = teacherPhoneNumber.replace(/[^0-9]/g, "");
+
+      if (!phoneNumber) {
+        alert("선생님 전화번호를 입력해 주세요.");
+        return;
+      }
+
+      if (!/^01[016789][0-9]{7,8}$/.test(phoneNumber)) {
+        alert("올바른 휴대전화 번호를 입력해 주세요.");
+        return;
+      }
+    }
+
     if (selectedScenarioId) {
       await handleUpdateScenario();
     } else {
@@ -578,78 +622,6 @@ function ScenarioManagement() {
       return res.data || null;
     } catch (err) {
       console.error("시나리오 액션 기록 중 오류 =", err);
-      return null;
-    }
-  };
-
-  // ✅ 호출형 미션 시작
-  const startScenarioCallMission = async ({
-    scenarioId,
-    studentId,
-    assignmentId,
-  }) => {
-    if (!scenarioId) {
-      console.warn("startScenarioCallMission: scenarioId가 없습니다.");
-      return null;
-    }
-
-    const payload = {
-      studentId: studentId || "",
-      assignmentId: assignmentId || "",
-    };
-
-    try {
-      const res = await axios.post(
-        `${API_BASE}/api/scenarios/${scenarioId}/call/start`,
-        payload,
-        axiosConfig,
-      );
-
-      if (!(res.status >= 200 && res.status < 300)) {
-        console.error("호출형 미션 시작 실패 =", res.status, res.data);
-        return null;
-      }
-
-      return res.data || null;
-    } catch (err) {
-      console.error("호출형 미션 시작 중 오류 =", err);
-      return null;
-    }
-  };
-
-  // ✅ 호출형 미션 종료
-  const endScenarioCallMission = async ({
-    scenarioId,
-    studentId,
-    assignmentId,
-    success,
-  }) => {
-    if (!scenarioId) {
-      console.warn("endScenarioCallMission: scenarioId가 없습니다.");
-      return null;
-    }
-
-    const payload = {
-      studentId: studentId || "",
-      assignmentId: assignmentId || "",
-      success: !!success,
-    };
-
-    try {
-      const res = await axios.post(
-        `${API_BASE}/api/scenarios/${scenarioId}/call/end`,
-        payload,
-        axiosConfig,
-      );
-
-      if (!(res.status >= 200 && res.status < 300)) {
-        console.error("호출형 미션 종료 실패 =", res.status, res.data);
-        return null;
-      }
-
-      return res.data || null;
-    } catch (err) {
-      console.error("호출형 미션 종료 중 오류 =", err);
       return null;
     }
   };
@@ -874,6 +846,9 @@ function ScenarioManagement() {
 
     setFireLocation(s.location || "");
     setTrainingTime(s.trainTime ? String(s.trainTime) : "");
+
+    setTeacherCallEnabled(Boolean(s.teacherCallEnabled));
+    setTeacherPhoneNumber(s.teacherPhoneNumber || "");
 
     saveScenarioConfigToLocalStorage({
       scenarioId: s.id,
@@ -1138,6 +1113,52 @@ function ScenarioManagement() {
                 </div>
               );
             })}
+          </div>
+        </div>
+
+        {/* 기존 발생 설정, 팀 설정, NPC 설정 */}
+
+        <div className="p-4 bg-white rounded shadow space-y-4">
+          <h3 className="text-xl font-semibold text-[#2E7D32]">
+            선생님 전화 미션 설정
+          </h3>
+
+          <select
+            value={teacherCallEnabled ? "사용" : "사용 안 함"}
+            onChange={(e) => {
+              const enabled = e.target.value === "사용";
+
+              setTeacherCallEnabled(enabled);
+
+              if (!enabled) {
+                setTeacherPhoneNumber("");
+              }
+            }}
+            className="border px-3 py-2 rounded w-full"
+          >
+            <option value="사용 안 함">사용 안 함</option>
+            <option value="사용">사용</option>
+          </select>
+
+          <p className="text-sm text-gray-500">
+            사용하지 않으면 기존 119 신고 순서 퀴즈가 진행됩니다.
+          </p>
+
+          <div>
+            <label className="block mb-1">선생님 전화번호</label>
+
+            <input
+              type="tel"
+              inputMode="numeric"
+              value={teacherPhoneNumber}
+              onChange={(e) => handleTeacherPhoneNumberChange(e.target.value)}
+              placeholder="예: 01012345678"
+              maxLength={11}
+              disabled={!teacherCallEnabled}
+              className={`border px-3 py-2 rounded w-full ${
+                !teacherCallEnabled ? "bg-gray-100 opacity-50" : ""
+              }`}
+            />
           </div>
         </div>
 
