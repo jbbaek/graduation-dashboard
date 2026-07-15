@@ -147,7 +147,9 @@ function ScenarioManagement() {
 
   const handleTeacherPhoneNumberChange = (value) => {
     const onlyNumber = value.replace(/[^0-9]/g, "");
+
     setTeacherPhoneNumber(onlyNumber);
+    setTeacherCallEnabled(onlyNumber.length > 0);
   };
 
   const buildManualTeamCounts = () => {
@@ -280,6 +282,8 @@ function ScenarioManagement() {
       "",
     );
 
+    const hasTeacherPhoneNumber = normalizedTeacherPhoneNumber.length > 0;
+
     const base = {
       classroomId,
       scenarioName: scenarioName?.trim() || `${disasterType} 시나리오`,
@@ -294,8 +298,8 @@ function ScenarioManagement() {
       npcPositions,
       participantCount: activeStudentCount,
 
-      teacherCallEnabled,
-      teacherPhoneNumber: teacherCallEnabled
+      teacherCallEnabled: hasTeacherPhoneNumber,
+      teacherPhoneNumber: hasTeacherPhoneNumber
         ? normalizedTeacherPhoneNumber
         : null,
     };
@@ -553,18 +557,12 @@ function ScenarioManagement() {
   };
 
   const handleSaveScenario = async () => {
-    if (teacherCallEnabled) {
-      const phoneNumber = teacherPhoneNumber.replace(/[^0-9]/g, "");
+    const phoneNumber = teacherPhoneNumber.replace(/[^0-9]/g, "");
 
-      if (!phoneNumber) {
-        alert("선생님 전화번호를 입력해 주세요.");
-        return;
-      }
-
-      if (!/^01[016789][0-9]{7,8}$/.test(phoneNumber)) {
-        alert("올바른 휴대전화 번호를 입력해 주세요.");
-        return;
-      }
+    // 번호가 입력된 경우에만 형식 검사
+    if (phoneNumber && !/^01[016789][0-9]{7,8}$/.test(phoneNumber)) {
+      alert("올바른 휴대전화 번호를 입력해 주세요.");
+      return;
     }
 
     if (selectedScenarioId) {
