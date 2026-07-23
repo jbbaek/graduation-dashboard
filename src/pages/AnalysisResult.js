@@ -6,6 +6,7 @@ import React, {
   useState,
 } from "react";
 import { useParams } from "react-router-dom";
+import ReactMarkdown from "react-markdown";
 import Navbar from "../components/Navbar";
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
@@ -241,77 +242,12 @@ function AnalysisResult() {
     );
   };
 
-  const buildFeedbackPayload = (student) => {
-    const details = student?.detailsJson || {};
+  const getStudentId = (student) => {
+    const rawStudentId = student?.studentId ?? student?.student_id ?? null;
 
-    const missions = [
-      {
-        title: "랜덤 퀴즈 수행",
-        status: student.randomQuizCompleted === true ? "COMPLETED" : "FAILED",
-      },
-      {
-        title: "119 신고",
-        status: student.reportCallCompleted === true ? "COMPLETED" : "FAILED",
-      },
-      {
-        title: "소화기 찾기",
-        status: student.extinguisherFound === true ? "COMPLETED" : "FAILED",
-      },
-      {
-        title: "안전구역 이동",
-        status: student.safeZoneCompleted === true ? "COMPLETED" : "FAILED",
-      },
-      {
-        title: "소화기 획득",
-        status:
-          student.fireteamExtinguisherAcquired === true
-            ? "COMPLETED"
-            : "FAILED",
-      },
-      {
-        title: "소화기 퀴즈",
-        status:
-          student.fireteamExtinguisherQuizCompleted === true
-            ? "COMPLETED"
-            : "FAILED",
-      },
-      {
-        title: "화재 진압 참여",
-        status:
-          student.fireteamDonutCompleted === true ? "COMPLETED" : "FAILED",
-      },
-    ];
-
-    // ✅ 랜덤 퀴즈는 총 5개
-    const TOTAL_RANDOM_QUIZ_COUNT = 5;
-
-    const correctQuizCount = Math.min(
-      Math.max(
-        Number(student.correctQuizCount ?? details.correctQuizCount ?? 0),
-        0,
-      ),
-      TOTAL_RANDOM_QUIZ_COUNT,
-    );
-
-    // ✅ 정답 개수만큼 true, 나머지는 false로 생성
-    const quizzes = Array.from(
-      { length: TOTAL_RANDOM_QUIZ_COUNT },
-      (_, index) => ({
-        isCorrect: index < correctQuizCount,
-      }),
-    );
-
-    return {
-      studentName: getStudentName(student),
-      missions,
-      quizzes,
-
-      // ✅ 기존 call119가 아니라 실제 응답 필드 사용
-      call119:
-        student.reportCallCompleted === true ||
-        details.reportCallCompleted === true,
-    };
+    return rawStudentId ? String(rawStudentId) : "";
   };
+
   const generateStudentFeedbacks = async () => {
     if (parsedStudentEvaluations.length === 0) {
       setError("AI 피드백을 생성할 학생 평가 결과가 없습니다.");
@@ -325,60 +261,106 @@ function AnalysisResult() {
     const nextFeedbackMap = {};
     const nextErrorMap = {};
 
-    await Promise.allSettled(
-      parsedStudentEvaluations.map(async (student) => {
+    try {
+      for (const student of parsedStudentEvaluations) {
         const studentKey = getStudentKey(student);
+        const studentId = getStudentId(student);
 
         if (!studentKey) {
-          return;
+          console.warn(
+            "[AnalysisResult] studentKey가 없어 피드백 요청을 생략합니다.",
+            student,
+          );
+          continue;
         }
 
-        try {
-          const payload = buildFeedbackPayload(student);
+        if (!studentId) {
+          console.error("[AnalysisResult] 실제 studentId가 없습니다.", {
+            scenarioId,
+            student,
+          });
 
-          const response = await fetch(`${API_BASE_URL}/api/ai/feedback`, {
+          nextErrorMap[studentKey] = "AI 피드백 생성에 실패했습니다.";
+
+          continue;
+        }
+
+        const feedbackUrl =
+          `${API_BASE_URL}/api/ai/scenarios/` +
+          `${encodeURIComponent(scenarioId)}/students/` +
+          `${encodeURIComponent(studentId)}/feedback`;
+
+        try {
+          console.log("[AnalysisResult] AI 피드백 요청", {
+            scenarioId,
+            studentId,
+            studentName: getStudentName(student),
+            feedbackUrl,
+          });
+
+          const response = await fetch(feedbackUrl, {
             method: "POST",
             headers: {
-              "Content-Type": "application/json; charset=UTF-8",
-              accept: "application/json",
+              Accept: "application/json",
             },
-            body: JSON.stringify(payload),
+
+            // 중요: body를 넣지 않음
           });
+
+          const responseText = await response.text();
 
           if (!response.ok) {
             let errorData = {};
 
             try {
-              errorData = await response.json();
+              errorData = responseText ? JSON.parse(responseText) : {};
             } catch {
               errorData = {};
             }
 
-            throw new Error(
-              errorData.message || `AI 피드백 생성 실패: ${response.status}`,
-            );
+            console.error("[AnalysisResult] AI 피드백 API 실패", {
+              status: response.status,
+              scenarioId,
+              studentId,
+              responseText,
+              errorData,
+            });
+
+            throw new Error("AI 피드백 생성에 실패했습니다.");
           }
 
-          const data = await response.json();
+          const data = responseText ? JSON.parse(responseText) : {};
 
-          nextFeedbackMap[studentKey] =
-            data.result || "AI 피드백 결과가 없습니다.";
-        } catch (err) {
-          console.error("[AnalysisResult] AI 피드백 생성 실패", err);
+          if (typeof data.result !== "string" || !data.result.trim()) {
+            throw new Error("AI 피드백 생성에 실패했습니다.");
+          }
 
-          nextErrorMap[studentKey] =
-            err.message || "AI 피드백 생성에 실패했습니다.";
+          // 백엔드 result를 그대로 저장
+          nextFeedbackMap[studentKey] = data.result;
+        } catch (studentError) {
+          console.error("[AnalysisResult] 학생별 AI 피드백 생성 실패", {
+            scenarioId,
+            studentId,
+            studentName: getStudentName(student),
+            error: studentError,
+          });
+
+          nextErrorMap[studentKey] = "AI 피드백 생성에 실패했습니다.";
         }
-      }),
-    );
 
-    setStudentFeedbackMap((prev) => ({
-      ...prev,
-      ...nextFeedbackMap,
-    }));
+        // AI 서버에 요청이 몰리지 않도록 짧게 대기
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
 
-    setFeedbackErrorMap(nextErrorMap);
-    setGeneratingFeedback(false);
+      setStudentFeedbackMap((prev) => ({
+        ...prev,
+        ...nextFeedbackMap,
+      }));
+
+      setFeedbackErrorMap(nextErrorMap);
+    } finally {
+      setGeneratingFeedback(false);
+    }
   };
 
   // ✅ 평가 결과를 화면 표시용 형태로 변환
@@ -787,15 +769,53 @@ function AnalysisResult() {
                           )}
                         </td>
 
-                        <td className="px-4 py-3 border text-gray-600 min-w-[320px] whitespace-pre-line">
+                        <td className="px-4 py-3 border text-gray-600 min-w-[320px]">
                           {feedbackError ? (
                             <span className="text-red-600">
                               {feedbackError}
                             </span>
                           ) : generatedFeedback ? (
-                            generatedFeedback
+                            <ReactMarkdown
+                              components={{
+                                h1: ({ children }) => (
+                                  <h1 className="text-xl font-bold text-[#2E7D32] mb-3">
+                                    {children}
+                                  </h1>
+                                ),
+                                h2: ({ children }) => (
+                                  <h2 className="text-lg font-bold text-[#2E7D32] mt-3 mb-2">
+                                    {children}
+                                  </h2>
+                                ),
+                                h3: ({ children }) => (
+                                  <h3 className="font-bold text-[#2E7D32] mt-3 mb-1">
+                                    {children}
+                                  </h3>
+                                ),
+                                p: ({ children }) => (
+                                  <p className="mb-2 last:mb-0">{children}</p>
+                                ),
+                                strong: ({ children }) => (
+                                  <strong className="font-bold text-gray-900">
+                                    {children}
+                                  </strong>
+                                ),
+                                ul: ({ children }) => (
+                                  <ul className="list-disc pl-5 my-2 space-y-1">
+                                    {children}
+                                  </ul>
+                                ),
+                                ol: ({ children }) => (
+                                  <ol className="list-decimal pl-5 my-2 space-y-1">
+                                    {children}
+                                  </ol>
+                                ),
+                              }}
+                            >
+                              {generatedFeedback}
+                            </ReactMarkdown>
                           ) : (
-                            student.feedbackText || "-"
+                            "-"
                           )}
                         </td>
                       </tr>

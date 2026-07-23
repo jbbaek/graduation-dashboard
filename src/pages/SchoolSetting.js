@@ -1414,6 +1414,66 @@ export default function SchoolSetting() {
     [floors, floorNames],
   );
 
+  // 구조도 전체를 JSON 파일로 다운로드
+  const handleExportMapJson = useCallback(() => {
+    try {
+      const exportedFloors = buildFloorsPayload();
+
+      if (!Array.isArray(exportedFloors) || exportedFloors.length === 0) {
+        alert("내보낼 구조도 정보가 없습니다.");
+        return;
+      }
+
+      const hasMapData = exportedFloors.some(
+        (floor) =>
+          floor?.image?.src ||
+          (Array.isArray(floor?.elements) && floor.elements.length > 0),
+      );
+
+      if (!hasMapData) {
+        alert("구조도 이미지 또는 설정된 요소가 없습니다.");
+        return;
+      }
+
+      const exportData = {
+        classroomId: classroomId || null,
+        schoolId: schoolId || null,
+        mapVersionId: activeMapVersionId || null,
+        exportedAt: new Date().toISOString(),
+        floors: exportedFloors,
+      };
+
+      const jsonText = JSON.stringify(exportData, null, 2);
+
+      const blob = new Blob([jsonText], {
+        type: "application/json;charset=utf-8",
+      });
+
+      const downloadUrl = URL.createObjectURL(blob);
+
+      const link = document.createElement("a");
+
+      const safeClassroomId = String(classroomId || "classroom").replace(
+        /[\\/:*?"<>|]/g,
+        "_",
+      );
+
+      link.href = downloadUrl;
+      link.download = `school-map-${safeClassroomId}.json`;
+
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      URL.revokeObjectURL(downloadUrl);
+
+      console.log("구조도 JSON 내보내기 완료 =", exportData);
+    } catch (error) {
+      console.error("구조도 JSON 내보내기 실패 =", error);
+      alert("구조도 JSON 파일을 생성하지 못했습니다.");
+    }
+  }, [buildFloorsPayload, classroomId, schoolId, activeMapVersionId]);
+
   const fetchActiveMap = useCallback(async () => {
     if (!classroomId) return;
 
@@ -4566,6 +4626,15 @@ export default function SchoolSetting() {
                 className={btnGray}
               >
                 구조도 목록
+              </button>
+
+              <button
+                type="button"
+                onClick={handleExportMapJson}
+                className={btnGray}
+                disabled={!floors.length}
+              >
+                JSON 추출
               </button>
 
               <button

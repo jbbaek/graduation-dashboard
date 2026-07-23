@@ -1424,27 +1424,56 @@ export default function Monitoring() {
                       {/* 전화 미션 판정 */}
                       <td className="border-b px-4 py-3">
                         <div className="flex justify-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleJudgeCallMission(student.studentId, true)
-                            }
-                            disabled={!canJudge || isJudging}
-                            className="rounded-lg bg-green-600 px-3 py-2 text-xs font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            성공
-                          </button>
+                          {callMissionStatus === "SUCCESS" ? (
+                            // 성공 판정 후에는 성공 버튼만 표시
+                            <button
+                              type="button"
+                              disabled
+                              className="rounded-lg bg-green-600 px-3 py-2 text-xs font-semibold text-white cursor-default"
+                            >
+                              성공
+                            </button>
+                          ) : callMissionStatus === "FAILED" ? (
+                            // 실패 판정 후에는 실패 버튼만 표시
+                            <button
+                              type="button"
+                              disabled
+                              className="rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white cursor-default"
+                            >
+                              실패
+                            </button>
+                          ) : (
+                            // 아직 판정하지 않은 경우 성공/실패 버튼 모두 표시
+                            <>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleJudgeCallMission(
+                                    student.studentId,
+                                    true,
+                                  )
+                                }
+                                disabled={!canJudge || isJudging}
+                                className="rounded-lg bg-green-600 px-3 py-2 text-xs font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                {isJudging ? "처리 중..." : "성공"}
+                              </button>
 
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleJudgeCallMission(student.studentId, false)
-                            }
-                            disabled={!canJudge || isJudging}
-                            className="rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            실패
-                          </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleJudgeCallMission(
+                                    student.studentId,
+                                    false,
+                                  )
+                                }
+                                disabled={!canJudge || isJudging}
+                                className="rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                {isJudging ? "처리 중..." : "실패"}
+                              </button>
+                            </>
+                          )}
                         </div>
 
                         {callMissionStatus === "CALLING" && (
