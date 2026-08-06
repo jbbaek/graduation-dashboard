@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import axios from "axios";
 import Navbar from "../components/Navbar";
@@ -74,6 +80,9 @@ function SchoolChannel() {
     }
   });
 
+  // 자동 종료 API 중복 호출 방지
+  const autoEndRequestedRef = useRef(false);
+
   // ✅ 마지막으로 종료된 훈련의 분석 결과 조회용 scenarioId
   const [resultScenarioId, setResultScenarioId] = useState(() => {
     try {
@@ -113,6 +122,42 @@ function SchoolChannel() {
     } catch {
       return {};
     }
+  };
+
+  const getTrainingDurationMs = (context) => {
+    if (!context) return null;
+
+    /*
+     * 초 단위로 내려오는 필드
+     */
+    const durationSeconds = Number(
+      context.trainingDurationSeconds ??
+        context.durationSeconds ??
+        context.timeLimitSeconds,
+    );
+
+    if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
+      return durationSeconds * 1000;
+    }
+
+    /*
+     * 분 단위로 내려오는 필드
+     *
+     * 실제 백엔드 응답 필드가 trainingTime이라면
+     * trainingTime을 분 단위로 사용합니다.
+     */
+    const durationMinutes = Number(
+      context.trainingDurationMinutes ??
+        context.durationMinutes ??
+        context.trainingTime ??
+        context.timeLimit,
+    );
+
+    if (Number.isFinite(durationMinutes) && durationMinutes > 0) {
+      return durationMinutes * 60 * 1000;
+    }
+
+    return null;
   };
 
   const buildTeamDistributePayload = (storedContext) => {
@@ -174,22 +219,69 @@ function SchoolChannel() {
   };
 
   const getStudentDisplayStatus = (student) => {
-    const trainingState = student.trainingState || gameContext?.trainingState;
+    const studentTrainingState = student?.trainingState;
+    const roomTrainingState = gameContext?.trainingState;
 
-    // ✅ 훈련이 종료되면 학생 개별 상태보다 우선해서 종료 표시
-    if (trainingState === "ENDED") {
+    /*
+     * 학생에게 trainingState가 내려오면 학생 상태를 우선 사용합니다.
+     *
+     * 이전 훈련이 ENDED인 상태에서 새 학생이 입장한 경우에는
+     * localStorage에 남아 있는 방 상태 때문에 "훈련 종료"가 표시되지 않도록
+     * 학생 입장 시간과 이전 훈련 종료 시간을 비교합니다.
+     */
+    const joinedAt = new Date(
+      student?.joinedAt ||
+        student?.createdAt ||
+        student?.enteredAt ||
+        student?.registeredAt ||
+        0,
+    ).getTime();
+
+    const previousTrainingEndedAt = gameContext?.trainingEndedAt
+      ? new Date(gameContext.trainingEndedAt).getTime()
+      : 0;
+
+    const joinedAfterTrainingEnded =
+      Number.isFinite(joinedAt) &&
+      joinedAt > 0 &&
+      Number.isFinite(previousTrainingEndedAt) &&
+      previousTrainingEndedAt > 0 &&
+      joinedAt > previousTrainingEndedAt;
+
+    if (studentTrainingState === "ENDED") {
       return "훈련 종료";
     }
 
-    if (student.status && student.status !== "UNKNOWN") {
+    if (
+      !studentTrainingState &&
+      roomTrainingState === "ENDED" &&
+      !joinedAfterTrainingEnded
+    ) {
+      return "훈련 종료";
+    }
+
+    if (student?.status && student.status !== "UNKNOWN") {
       if (student.status === "EVACUATING") return "대피 중";
       if (student.status === "EVACUATED") return "대피 완료";
       if (student.status === "RESTRICTED") return "제한됨";
+
+      /*
+       * 아직 훈련이 시작되지 않았는데 백엔드에서 일반 상태값을 보내는 경우에도
+       * 학생 목록에서는 훈련 대기 상태를 우선 표시합니다.
+       */
+      if (
+        studentTrainingState !== "RUNNING" &&
+        roomTrainingState !== "RUNNING"
+      ) {
+        return "훈련 대기중";
+      }
+
       return student.status;
     }
 
-    if (trainingState === "WAITING") return "훈련 대기중";
-    if (trainingState === "RUNNING") return "훈련 진행중";
+    if (studentTrainingState === "RUNNING" || roomTrainingState === "RUNNING") {
+      return "훈련 진행중";
+    }
 
     return "훈련 대기중";
   };
@@ -658,10 +750,12 @@ function SchoolChannel() {
         classroomId: stored?.classroomId || String(classroomId),
         scenarioId: res.data?.scenarioId || stored?.scenarioId || scenarioId,
         trainingState: res.data?.trainingState || "RUNNING",
-        trainingStartedAt: res.data?.trainingStartedAt || null,
+        trainingStartedAt: res.data?.trainingStartedAt || getIsoNow(),
         trainingEndedAt: res.data?.trainingEndedAt || null,
         activeScenarioId: res.data?.activeScenarioId || scenarioId,
       };
+
+      autoEndRequestedRef.current = false;
 
       saveGameContext(nextContext);
       return true;
@@ -671,96 +765,193 @@ function SchoolChannel() {
     }
   };
 
-  const handleTrainingEnd = async () => {
-    if (!classroomId) {
-      alert("classroomId 없음");
+  const handleTrainingEnd = useCallback(
+    async (isAutoEnd = false) => {
+      if (!classroomId) {
+        alert("classroomId 없음");
+        return false;
+      }
+
+      const stored = getStoredGameContext();
+      const scenarioId = stored?.scenarioId || stored?.activeScenarioId || null;
+      const endedAt = getIsoNow();
+
+      const payload = {
+        classroomId: String(classroomId),
+        trainingState: "ENDED",
+        trainingStartedAt: stored?.trainingStartedAt || null,
+        trainingEndedAt: endedAt,
+        activeScenarioId: scenarioId,
+      };
+
+      try {
+        setLoading(true);
+
+        const res = await axios.post(
+          `${API_BASE}/api/rooms/${classroomId}/training/end`,
+          payload,
+          {
+            headers: {
+              "Content-Type": "application/json; charset=UTF-8",
+              ...authHeaders,
+            },
+            timeout: 10000,
+            validateStatus: () => true,
+          },
+        );
+
+        if (!(res.status >= 200 && res.status < 300)) {
+          showError("훈련 종료 상태 저장 실패", res);
+          return false;
+        }
+
+        const resultScenarioId =
+          res.data?.activeScenarioId || res.data?.scenarioId || scenarioId;
+
+        const nextContext = {
+          ...stored,
+          trainingState: res.data?.trainingState || "ENDED",
+          trainingStartedAt:
+            res.data?.trainingStartedAt || stored?.trainingStartedAt || null,
+          trainingEndedAt: res.data?.trainingEndedAt || endedAt,
+          activeScenarioId: resultScenarioId,
+          scenarioId: resultScenarioId,
+        };
+
+        saveGameContext(nextContext);
+        await fetchStudents();
+
+        if (!resultScenarioId) {
+          alert(
+            "훈련은 종료되었지만 분석 결과를 불러올 시나리오 ID가 없습니다.",
+          );
+          return false;
+        }
+
+        localStorage.setItem(
+          "lastResultContext",
+          JSON.stringify({
+            scenarioId: resultScenarioId,
+            activeScenarioId: resultScenarioId,
+            classroomId,
+            joinCode,
+            roomName: className,
+            studentCount,
+          }),
+        );
+
+        localStorage.setItem("activeScenarioId", String(resultScenarioId));
+        setResultScenarioId(resultScenarioId);
+
+        alert(
+          isAutoEnd
+            ? "시나리오에 지정된 시간이 지나 훈련이 자동으로 종료되었습니다.\n분석 결과 보기 버튼을 누르면 결과를 확인할 수 있습니다."
+            : "훈련이 종료되었습니다.\n분석 결과 보기 버튼을 누르면 결과를 확인할 수 있습니다.",
+        );
+
+        return true;
+      } catch (err) {
+        showError("훈련 종료 상태 저장 중 오류", err);
+        return false;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [
+      classroomId,
+      authHeaders,
+      fetchStudents,
+      joinCode,
+      className,
+      studentCount,
+    ],
+  );
+
+  useEffect(() => {
+    if (!gameContext) return;
+
+    const trainingState = gameContext.trainingState;
+    const startedAtValue = gameContext.trainingStartedAt;
+    const durationMs = getTrainingDurationMs(gameContext);
+
+    // 훈련 진행 중이 아니면 타이머를 만들지 않음
+    if (trainingState !== "RUNNING") {
+      autoEndRequestedRef.current = false;
       return;
     }
 
-    const stored = getStoredGameContext();
+    if (!startedAtValue) {
+      console.warn("자동 종료 실패: trainingStartedAt이 없습니다.");
+      return;
+    }
 
-    const scenarioId = stored?.scenarioId || stored?.activeScenarioId || null;
+    if (!durationMs) {
+      console.warn(
+        "자동 종료 실패: 시나리오 훈련 시간을 찾을 수 없습니다.",
+        gameContext,
+      );
+      return;
+    }
 
-    const endedAt = getIsoNow();
+    const startedAt = new Date(startedAtValue).getTime();
 
-    const payload = {
-      classroomId: String(classroomId),
-      trainingState: "ENDED",
-      trainingStartedAt: stored?.trainingStartedAt || null,
-      trainingEndedAt: endedAt,
-      activeScenarioId: scenarioId,
+    if (!Number.isFinite(startedAt)) {
+      console.warn(
+        "자동 종료 실패: trainingStartedAt 형식이 올바르지 않습니다.",
+        startedAtValue,
+      );
+      return;
+    }
+
+    const scheduledEndAt = startedAt + durationMs;
+    const remainingMs = scheduledEndAt - Date.now();
+
+    console.log("훈련 자동 종료 설정", {
+      startedAt: new Date(startedAt).toISOString(),
+      scheduledEndAt: new Date(scheduledEndAt).toISOString(),
+      remainingMs,
+    });
+
+    const requestAutoEnd = async () => {
+      if (autoEndRequestedRef.current) return;
+
+      autoEndRequestedRef.current = true;
+
+      try {
+        await handleTrainingEnd(true);
+      } catch (err) {
+        console.error("훈련 자동 종료 실패", err);
+
+        // 실패했을 때 다시 시도할 수 있도록 해제
+        autoEndRequestedRef.current = false;
+      }
     };
 
-    try {
-      setLoading(true);
-
-      const res = await axios.post(
-        `${API_BASE}/api/rooms/${classroomId}/training/end`,
-        payload,
-        {
-          headers: {
-            "Content-Type": "application/json; charset=UTF-8",
-            ...authHeaders,
-          },
-          timeout: 10000,
-          validateStatus: () => true,
-        },
-      );
-
-      if (!(res.status >= 200 && res.status < 300)) {
-        showError("훈련 종료 상태 저장 실패", res);
-        return;
-      }
-
-      const resultScenarioId =
-        res.data?.activeScenarioId || res.data?.scenarioId || scenarioId;
-
-      const nextContext = {
-        ...stored,
-        trainingState: res.data?.trainingState || "ENDED",
-        trainingStartedAt:
-          res.data?.trainingStartedAt || stored?.trainingStartedAt || null,
-        trainingEndedAt: res.data?.trainingEndedAt || endedAt,
-        activeScenarioId: resultScenarioId,
-        scenarioId: resultScenarioId,
-      };
-
-      saveGameContext(nextContext);
-
-      // ✅ 훈련 종료 후 학생 상태를 다시 조회
-      await fetchStudents();
-
-      if (!resultScenarioId) {
-        alert("훈련은 종료되었지만 분석 결과를 불러올 시나리오 ID가 없습니다.");
-        return;
-      }
-
-      localStorage.setItem(
-        "lastResultContext",
-        JSON.stringify({
-          scenarioId: resultScenarioId,
-          activeScenarioId: resultScenarioId,
-          classroomId,
-          joinCode,
-          roomName: className,
-          studentCount,
-        }),
-      );
-
-      // ✅ Navbar가 언제든지 최근 scenarioId를 찾을 수 있도록 별도 저장
-      localStorage.setItem("activeScenarioId", String(resultScenarioId));
-
-      setResultScenarioId(resultScenarioId);
-
-      alert(
-        "훈련이 종료되었습니다.\n분석 결과 보기 버튼을 누르면 결과를 확인할 수 있습니다.",
-      );
-    } catch (err) {
-      showError("훈련 종료 상태 저장 중 오류", err);
-    } finally {
-      setLoading(false);
+    // 이미 종료 예정 시간을 지났다면 바로 종료
+    if (remainingMs <= 0) {
+      requestAutoEnd();
+      return;
     }
-  };
+
+    const timerId = window.setTimeout(() => {
+      requestAutoEnd();
+    }, remainingMs);
+
+    return () => {
+      window.clearTimeout(timerId);
+    };
+  }, [
+    gameContext?.trainingState,
+    gameContext?.trainingStartedAt,
+    gameContext?.trainingDurationSeconds,
+    gameContext?.durationSeconds,
+    gameContext?.timeLimitSeconds,
+    gameContext?.trainingDurationMinutes,
+    gameContext?.durationMinutes,
+    gameContext?.trainingTime,
+    gameContext?.timeLimit,
+    handleTrainingEnd,
+  ]);
 
   const handleGameStart = async () => {
     if (!classroomId) return alert("classroomId 없음");

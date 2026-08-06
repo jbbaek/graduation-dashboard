@@ -3888,6 +3888,100 @@ export default function SchoolSetting() {
         return;
       }
 
+      // ====== 요소 리사이즈 ======
+      if (resizing && mode === null) {
+        const MIN_SIZE = 10;
+
+        const dx = nat.x - resizing.startNat.x;
+        const dy = nat.y - resizing.startNat.y;
+
+        setElements((prev) =>
+          prev.map((el) => {
+            if (el.id !== resizing.id) return el;
+
+            const {
+              x: originalX,
+              y: originalY,
+              width: originalWidth,
+              height: originalHeight,
+            } = resizing.orig;
+
+            let nextX = originalX;
+            let nextY = originalY;
+            let nextWidth = originalWidth;
+            let nextHeight = originalHeight;
+
+            const handle = resizing.handle;
+
+            // 오른쪽 방향
+            if (handle.includes("e")) {
+              nextWidth = originalWidth + dx;
+            }
+
+            // 아래 방향
+            if (handle.includes("s")) {
+              nextHeight = originalHeight + dy;
+            }
+
+            // 왼쪽 방향
+            if (handle.includes("w")) {
+              nextX = originalX + dx;
+              nextWidth = originalWidth - dx;
+            }
+
+            // 위쪽 방향
+            if (handle.includes("n")) {
+              nextY = originalY + dy;
+              nextHeight = originalHeight - dy;
+            }
+
+            // 최소 너비 제한
+            if (nextWidth < MIN_SIZE) {
+              if (handle.includes("w")) {
+                nextX = originalX + originalWidth - MIN_SIZE;
+              }
+
+              nextWidth = MIN_SIZE;
+            }
+
+            // 최소 높이 제한
+            if (nextHeight < MIN_SIZE) {
+              if (handle.includes("n")) {
+                nextY = originalY + originalHeight - MIN_SIZE;
+              }
+
+              nextHeight = MIN_SIZE;
+            }
+
+            // 구조도 이미지 바깥으로 나가지 않도록 제한
+            nextX = clamp(nextX, 0, imgNatural.w - MIN_SIZE);
+            nextY = clamp(nextY, 0, imgNatural.h - MIN_SIZE);
+
+            nextWidth = clamp(
+              nextWidth,
+              MIN_SIZE,
+              Math.max(MIN_SIZE, imgNatural.w - nextX),
+            );
+
+            nextHeight = clamp(
+              nextHeight,
+              MIN_SIZE,
+              Math.max(MIN_SIZE, imgNatural.h - nextY),
+            );
+
+            return {
+              ...el,
+              x: round4(nextX),
+              y: round4(nextY),
+              width: round4(nextWidth),
+              height: round4(nextHeight),
+            };
+          }),
+        );
+
+        return;
+      }
+
       if (dragging && dragging.type === "elements" && mode === null && inside) {
         const dx = nat.x - dragging.startNat.x;
         const dy = nat.y - dragging.startNat.y;
@@ -3972,6 +4066,7 @@ export default function SchoolSetting() {
       isInsideImageNatural,
       isPanning,
       mode,
+      resizing,
       rotatingDoorId,
       zoom,
       currentFloorIndex,
@@ -3980,6 +4075,10 @@ export default function SchoolSetting() {
   );
 
   const onViewportMouseUp = useCallback(() => {
+    if (resizing) {
+      setResizing(null);
+    }
+
     if (pendingDoorId) {
       setRotatingDoorId(pendingDoorId);
       setPendingDoorId(null);
@@ -4086,9 +4185,30 @@ export default function SchoolSetting() {
     pendingDoorId,
     preview,
     pushUndoSnapshot,
+    resizing,
     selectionRect,
     setElements,
   ]);
+
+  useEffect(() => {
+    if (!resizing) return;
+
+    const handleWindowMouseMove = (event) => {
+      onViewportMouseMove(event);
+    };
+
+    const handleWindowMouseUp = () => {
+      setResizing(null);
+    };
+
+    window.addEventListener("mousemove", handleWindowMouseMove);
+    window.addEventListener("mouseup", handleWindowMouseUp);
+
+    return () => {
+      window.removeEventListener("mousemove", handleWindowMouseMove);
+      window.removeEventListener("mouseup", handleWindowMouseUp);
+    };
+  }, [resizing, onViewportMouseMove]);
 
   const onViewportContextMenu = useCallback(
     (e) => {
@@ -5056,6 +5176,9 @@ export default function SchoolSetting() {
               userSelect: "none",
               overflow: "hidden",
               position: "relative",
+              cursor: resizing
+                ? handleCursorMap[resizing.handle] || "default"
+                : "default",
             }}
             onMouseDown={onViewportMouseDown}
             onMouseMove={onViewportMouseMove}
