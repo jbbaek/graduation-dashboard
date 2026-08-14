@@ -332,6 +332,7 @@ function ScenarioManagement() {
     scenarioType,
     teamMode,
     teamAssignment,
+    trainTime,
   }) => {
     try {
       const prev = JSON.parse(localStorage.getItem("gameContext") || "{}");
@@ -346,12 +347,20 @@ function ScenarioManagement() {
           scenarioType,
           teamMode,
           teamAssignmentJson: teamAssignment || "{}",
+
+          // ✅ trainTime이 전달된 경우에만 새 값 사용
+          // 전달되지 않았으면 기존 값 유지
+          trainTime:
+            trainTime !== undefined && trainTime !== null
+              ? Number(trainTime)
+              : Number(prev?.trainTime || 0),
         }),
       );
     } catch (err) {
       console.error("gameContext 저장 실패 =", err);
     }
   };
+
   const showAxiosError = (title, errOrRes) => {
     const response = errOrRes?.response || errOrRes;
     const data = response?.data || {};
@@ -468,9 +477,10 @@ function ScenarioManagement() {
         scenarioType: payload.scenarioType,
         teamMode: payload.teamMode,
         teamAssignment: payload.teamAssignment,
-      });
 
-      setSelectedScenarioId(createdScenarioId);
+        // ✅ 추가
+        trainTime: payload.trainTime,
+      });
 
       if (createdScenarioId) {
         await recordScenarioAction({
@@ -546,7 +556,11 @@ function ScenarioManagement() {
         scenarioType: payload.scenarioType,
         teamMode: payload.teamMode,
         teamAssignment: payload.teamAssignment,
+
+        // ✅ 추가
+        trainTime: payload.trainTime,
       });
+
       await fetchScenarioList();
     } catch (err) {
       console.error(err);
@@ -755,6 +769,9 @@ function ScenarioManagement() {
       scenarioType: disasterType === "화재" ? "FIRE" : "EARTHQUAKE",
       teamMode: teamSetting === "수동설정" ? "MANUAL" : "AUTO",
       teamAssignment: JSON.stringify(normalizedTeamCounts),
+
+      // ✅ 현재 선택한 시나리오의 훈련 시간도 같이 유지
+      trainTime: Number(trainingTime || 0),
     });
 
     const distributed = await distributeTeams(selectedScenarioId);
@@ -853,6 +870,9 @@ function ScenarioManagement() {
       scenarioType: s.scenarioType,
       teamMode: s.teamMode,
       teamAssignment: s.teamAssignmentJson,
+
+      // ✅ 추가
+      trainTime: s.trainTime,
     });
 
     alert("✅ 시작할 시나리오로 활성화되었습니다.");

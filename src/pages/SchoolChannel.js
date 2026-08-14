@@ -80,6 +80,9 @@ function SchoolChannel() {
     }
   });
 
+  // ✅ 화면에 표시할 남은 훈련 시간
+  const [remainingSeconds, setRemainingSeconds] = useState(null);
+
   // 자동 종료 API 중복 호출 방지
   const autoEndRequestedRef = useRef(false);
 
@@ -127,9 +130,7 @@ function SchoolChannel() {
   const getTrainingDurationMs = (context) => {
     if (!context) return null;
 
-    /*
-     * 초 단위로 내려오는 필드
-     */
+    // ✅ 진짜 초 단위로 내려오는 필드
     const durationSeconds = Number(
       context.trainingDurationSeconds ??
         context.durationSeconds ??
@@ -140,14 +141,12 @@ function SchoolChannel() {
       return durationSeconds * 1000;
     }
 
-    /*
-     * 분 단위로 내려오는 필드
-     *
-     * 실제 백엔드 응답 필드가 trainingTime이라면
-     * trainingTime을 분 단위로 사용합니다.
-     */
+    // ✅ 현재 백엔드의 trainingTimeSeconds는
+    // 이름은 Seconds지만 실제 값은 시나리오의 "분" 값
     const durationMinutes = Number(
-      context.trainingDurationMinutes ??
+      context.trainingTimeSeconds ??
+        context.trainTime ??
+        context.trainingDurationMinutes ??
         context.durationMinutes ??
         context.trainingTime ??
         context.timeLimit,
@@ -158,6 +157,23 @@ function SchoolChannel() {
     }
 
     return null;
+  };
+
+  // ✅ 남은 시간을 10:00 형태로 표시
+  const formatRemainingTime = (totalSeconds) => {
+    if (totalSeconds === null || totalSeconds === undefined) {
+      return "--:--";
+    }
+
+    const safeSeconds = Math.max(0, Number(totalSeconds) || 0);
+
+    const minutes = Math.floor(safeSeconds / 60);
+    const seconds = safeSeconds % 60;
+
+    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(
+      2,
+      "0",
+    )}`;
   };
 
   const buildTeamDistributePayload = (storedContext) => {
@@ -717,8 +733,29 @@ function SchoolChannel() {
       return false;
     }
 
-    // ✅ 여기 추가 (핵심)
-    const stored = contextData || getStoredGameContext();
+    // ✅ localStorage에 저장되어 있던 시나리오 정보
+    const localContext = getStoredGameContext();
+
+    // ✅ 서버 응답과 localStorage 정보를 합침
+    // 서버 응답에 trainTime이 없어도 localStorage의 trainTime 유지
+    const stored = {
+      ...localContext,
+      ...(contextData || {}),
+    };
+
+    console.log("🔥 trainingTimeSeconds =", stored?.trainingTimeSeconds);
+    console.log("🔥 trainTime =", stored?.trainTime);
+    console.log("🔥 trainingTime =", stored?.trainingTime);
+
+    console.log(
+      "🔥 trainingDurationMinutes =",
+      stored?.trainingDurationMinutes,
+    );
+
+    console.log(
+      "🔥 trainingDurationSeconds =",
+      stored?.trainingDurationSeconds,
+    );
 
     const scenarioId = stored?.scenarioId || stored?.activeScenarioId || null;
 
@@ -757,7 +794,12 @@ function SchoolChannel() {
 
       autoEndRequestedRef.current = false;
 
+      // ✅ 시나리오에서 설정한 시간을 초 단위로 변환
+      // ✅ 훈련 정보를 저장하면 useEffect에서 타이머를 자동 계산함
       saveGameContext(nextContext);
+
+      console.log("🔥 훈련 시작 context 저장 =", nextContext);
+
       return true;
     } catch (err) {
       showError("훈련 시작 상태 저장 중 오류", err);
@@ -868,91 +910,117 @@ function SchoolChannel() {
   );
 
   useEffect(() => {
-    if (!gameContext) return;
-
-    const trainingState = gameContext.trainingState;
-    const startedAtValue = gameContext.trainingStartedAt;
-    const durationMs = getTrainingDurationMs(gameContext);
-
-    // 훈련 진행 중이 아니면 타이머를 만들지 않음
-    if (trainingState !== "RUNNING") {
-      autoEndRequestedRef.current = false;
+    if (!gameContext) {
+      setRemainingSeconds(null);
       return;
     }
 
+    // ✅ 훈련 중이 아니면 타이머 X
+    if (gameContext.trainingState !== "RUNNING") {
+      setRemainingSeconds(null);
+      return;
+    }
+
+    const startedAtValue = gameContext.trainingStartedAt;
+    const durationMs = getTrainingDurationMs(gameContext);
+
     if (!startedAtValue) {
-      console.warn("자동 종료 실패: trainingStartedAt이 없습니다.");
+      console.warn("⚠ trainingStartedAt이 없습니다.");
+      setRemainingSeconds(null);
       return;
     }
 
     if (!durationMs) {
-      console.warn(
-        "자동 종료 실패: 시나리오 훈련 시간을 찾을 수 없습니다.",
-        gameContext,
-      );
+      console.warn("⚠ 훈련 시간을 찾을 수 없습니다.", gameContext);
+      setRemainingSeconds(null);
       return;
     }
 
-    const startedAt = new Date(startedAtValue).getTime();
+    // ✅ 서버 시간이 UTC인데 Z가 빠져 내려오는 경우 보정
+    const normalizeServerDateTime = (value) => {
+      if (!value) return null;
+
+      let normalized = String(value);
+
+      // Java의 LocalDateTime처럼 timezone 정보가 없는 경우 UTC로 처리
+      const hasTimezone =
+        normalized.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(normalized);
+
+      if (!hasTimezone) {
+        normalized += "Z";
+      }
+
+      return normalized;
+    };
+
+    const normalizedStartedAt = normalizeServerDateTime(startedAtValue);
+
+    const startedAt = new Date(normalizedStartedAt).getTime();
 
     if (!Number.isFinite(startedAt)) {
       console.warn(
-        "자동 종료 실패: trainingStartedAt 형식이 올바르지 않습니다.",
+        "⚠ trainingStartedAt 형식이 올바르지 않습니다.",
         startedAtValue,
       );
+
+      setRemainingSeconds(null);
       return;
     }
 
-    const scheduledEndAt = startedAt + durationMs;
-    const remainingMs = scheduledEndAt - Date.now();
+    // ✅ 실제 종료 예정 시각
+    const endAt = startedAt + durationMs;
 
-    console.log("훈련 자동 종료 설정", {
+    console.log("🔥 훈련 타이머 복원", {
       startedAt: new Date(startedAt).toISOString(),
-      scheduledEndAt: new Date(scheduledEndAt).toISOString(),
-      remainingMs,
+      endAt: new Date(endAt).toISOString(),
+      durationMs,
     });
 
-    const requestAutoEnd = async () => {
-      if (autoEndRequestedRef.current) return;
+    const updateCountdown = () => {
+      // ✅ 현재 시간 기준으로 남은 시간 재계산
+      const remainingMs = endAt - Date.now();
 
-      autoEndRequestedRef.current = true;
+      const seconds = Math.max(0, Math.ceil(remainingMs / 1000));
 
-      try {
-        await handleTrainingEnd(true);
-      } catch (err) {
-        console.error("훈련 자동 종료 실패", err);
+      setRemainingSeconds(seconds);
 
-        // 실패했을 때 다시 시도할 수 있도록 해제
-        autoEndRequestedRef.current = false;
+      // ✅ 시간 종료
+      if (remainingMs <= 0) {
+        if (!autoEndRequestedRef.current) {
+          autoEndRequestedRef.current = true;
+
+          console.log("🔥 훈련 시간 종료 → 자동 종료 API 호출");
+
+          handleTrainingEnd(true).then((success) => {
+            if (!success) {
+              autoEndRequestedRef.current = false;
+            }
+          });
+        }
       }
     };
 
-    // 이미 종료 예정 시간을 지났다면 바로 종료
-    if (remainingMs <= 0) {
-      requestAutoEnd();
-      return;
-    }
+    // ✅ 페이지에 들어온 즉시 남은 시간 계산
+    updateCountdown();
 
-    const timerId = window.setTimeout(() => {
-      requestAutoEnd();
-    }, remainingMs);
+    // ✅ 이후 1초마다 현재시간 기준으로 다시 계산
+    const intervalId = window.setInterval(() => {
+      updateCountdown();
+    }, 1000);
 
     return () => {
-      window.clearTimeout(timerId);
+      window.clearInterval(intervalId);
     };
   }, [
     gameContext?.trainingState,
     gameContext?.trainingStartedAt,
+    gameContext?.trainingTimeSeconds,
+    gameContext?.trainTime,
     gameContext?.trainingDurationSeconds,
     gameContext?.durationSeconds,
     gameContext?.timeLimitSeconds,
-    gameContext?.trainingDurationMinutes,
-    gameContext?.durationMinutes,
-    gameContext?.trainingTime,
-    gameContext?.timeLimit,
     handleTrainingEnd,
   ]);
-
   const handleGameStart = async () => {
     if (!classroomId) return alert("classroomId 없음");
 
@@ -1045,9 +1113,28 @@ function SchoolChannel() {
                   {joinCode}
                 </span>
               </div>
+
               <div className="text-sm text-gray-700 mt-1">
                 학생 수: {studentCount}명
               </div>
+
+              {/* ✅ 훈련 중일 때만 카운트다운 표시 */}
+              {gameContext?.trainingState === "RUNNING" && (
+                <div className="mt-3">
+                  <div className="text-sm text-gray-500">남은 훈련 시간</div>
+
+                  <div
+                    className={`text-3xl font-extrabold ${
+                      remainingSeconds !== null && remainingSeconds <= 60
+                        ? "text-red-500"
+                        : "text-[#2E7D32]"
+                    }`}
+                  >
+                    {formatRemainingTime(remainingSeconds)}
+                  </div>
+                </div>
+              )}
+
               {!userId && (
                 <div className="text-xs text-red-500 mt-1">
                   ⚠ userId가 없습니다. 재발급/수정이 실패할 수 있어요.
