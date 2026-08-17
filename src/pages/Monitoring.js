@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
 import Navbar from "../components/Navbar";
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
 
 export default function Monitoring() {
+  const location = useLocation();
   // =========================
   // 기본 값
   // =========================
@@ -15,6 +17,18 @@ export default function Monitoring() {
       ""
     );
   }, []);
+
+  const schoolId = useMemo(() => {
+    return location.state?.schoolId || localStorage.getItem("schoolId") || "";
+  }, [location.state]);
+
+  useEffect(() => {
+    const id = location.state?.schoolId;
+
+    if (id) {
+      localStorage.setItem("schoolId", id);
+    }
+  }, [location.state]);
 
   const authHeaders = useMemo(() => {
     const token = localStorage.getItem("token");
@@ -37,6 +51,12 @@ export default function Monitoring() {
   const [monitoringData, setMonitoringData] = useState(null);
 
   const [allStudents, setAllStudents] = useState([]);
+
+  // ✅ 실제 비콘 위치
+  const [beacons, setBeacons] = useState([]);
+
+  // ✅ 비콘 ↔ 구역 매핑
+  const [beaconMappings, setBeaconMappings] = useState([]);
 
   // 학생별 전화 미션 상태
   const [callMissions, setCallMissions] = useState([]);
@@ -268,6 +288,75 @@ export default function Monitoring() {
     return response.json();
   }, [classroomId, authHeaders]);
 
+  // =========================
+  // 실제 비콘 목록 API
+  // =========================
+
+  const fetchBeacons = useCallback(async () => {
+    if (!schoolId) {
+      console.warn("[Monitoring] schoolId가 없어 비콘 조회 생략");
+      return [];
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}/api/beacons?schoolId=${encodeURIComponent(schoolId)}`,
+      {
+        headers: {
+          ...authHeaders,
+        },
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(`beacons 실패 (${response.status})`);
+    }
+
+    const data = await response.json();
+
+    console.log("🔥 [Monitoring] 실제 비콘 목록 =", data);
+
+    console.log("🔥 [Monitoring] 첫 번째 비콘 상세 =", data?.[0]);
+
+    console.log(
+      "🔥 [Monitoring] 첫 번째 비콘 JSON =",
+      JSON.stringify(data?.[0], null, 2),
+    );
+
+    return Array.isArray(data) ? data : [];
+  }, [schoolId, authHeaders]);
+
+  // =========================
+  // 비콘 ↔ 구역 매핑 API
+  // =========================
+
+  const fetchBeaconMappings = useCallback(
+    async (floorIndex) => {
+      if (!schoolId) return [];
+
+      const response = await fetch(
+        `${API_BASE_URL}/api/beacon-element-maps` +
+          `?schoolId=${encodeURIComponent(schoolId)}` +
+          `&floorIndex=${encodeURIComponent(floorIndex)}`,
+        {
+          headers: {
+            ...authHeaders,
+          },
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(`beacon-element-maps 실패 (${response.status})`);
+      }
+
+      const data = await response.json();
+
+      console.log("🔥 [Monitoring] 비콘-구역 매핑 =", data);
+
+      return Array.isArray(data) ? data : [];
+    },
+    [schoolId, authHeaders],
+  );
+
   // 여기에 추가
   const getActiveScenarioId = useCallback(() => {
     try {
@@ -381,13 +470,19 @@ export default function Monitoring() {
       // 주기적으로 갱신할 때 화면 전체 로딩 상태는 켜지 않음
       setError("");
 
-      const [monitoringResult, studentsResult, mapResult, callMissionsResult] =
-        await Promise.allSettled([
-          fetchMonitoringMap(),
-          fetchStudents(),
-          fetchMapData(),
-          fetchCallMissions(),
-        ]);
+      const [
+        monitoringResult,
+        studentsResult,
+        mapResult,
+        callMissionsResult,
+        beaconsResult,
+      ] = await Promise.allSettled([
+        fetchMonitoringMap(),
+        fetchStudents(),
+        fetchMapData(),
+        fetchCallMissions(),
+        fetchBeacons(),
+      ]);
 
       // =========================
       // monitoring-map
@@ -500,6 +595,24 @@ export default function Monitoring() {
         console.warn("전화 미션 목록 조회 실패", callMissionsResult.reason);
       }
 
+      // =========================
+      // 실제 비콘 목록
+      // =========================
+
+      if (beaconsResult.status === "fulfilled") {
+        const beaconList = Array.isArray(beaconsResult.value)
+          ? beaconsResult.value
+          : [];
+
+        setBeacons(beaconList);
+
+        console.log("🔥 [Monitoring] 저장된 실제 비콘 =", beaconList);
+      } else {
+        console.warn("비콘 목록 조회 실패", beaconsResult.reason);
+
+        setBeacons([]);
+      }
+
       setMonitoringData(monitoring);
       setAllStudents(students);
       setCallMissions(missions);
@@ -511,7 +624,13 @@ export default function Monitoring() {
         err?.message || "모니터링 데이터를 불러오는 중 오류가 발생했습니다.",
       );
     }
-  }, [fetchMonitoringMap, fetchStudents, fetchMapData, fetchCallMissions]);
+  }, [
+    fetchMonitoringMap,
+    fetchStudents,
+    fetchMapData,
+    fetchCallMissions,
+    fetchBeacons,
+  ]);
 
   const handleJudgeCallMission = async (studentId, success) => {
     const scenarioId = getActiveScenarioId();
@@ -621,6 +740,33 @@ export default function Monitoring() {
   }, [floors, selectedFloorIndex]);
 
   // =========================
+  // 현재 층 비콘 ↔ 구역 매핑 조회
+  // =========================
+
+  useEffect(() => {
+    if (!selectedFloor) {
+      setBeaconMappings([]);
+      return;
+    }
+
+    const floorIndex = Number(selectedFloor.floorIndex ?? selectedFloorIndex);
+
+    const loadMappings = async () => {
+      try {
+        const data = await fetchBeaconMappings(floorIndex);
+
+        setBeaconMappings(Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.error("[Monitoring] 비콘-구역 매핑 조회 실패 =", err);
+
+        setBeaconMappings([]);
+      }
+    };
+
+    loadMappings();
+  }, [selectedFloor, selectedFloorIndex, fetchBeaconMappings]);
+
+  // =========================
   // image
   // =========================
 
@@ -677,86 +823,147 @@ export default function Monitoring() {
   // marker
   // =========================
 
-  const markers = Array.isArray(selectedFloor?.beaconMarkers)
-    ? selectedFloor.beaconMarkers.filter((marker) => marker.isActive !== false)
+  // monitoring-map은 학생 감지 정보용
+  const monitoringMarkers = Array.isArray(selectedFloor?.beaconMarkers)
+    ? selectedFloor.beaconMarkers
     : [];
 
+  // 현재 서버 층 번호
+  const currentFloorNumber = Number(
+    selectedFloor?.floorIndex ?? selectedFloorIndex,
+  );
+
+  console.log("🔥 현재 구조도 층 =", {
+    selectedFloorIndex,
+    selectedFloorFloorIndex: selectedFloor?.floorIndex,
+    currentFloorNumber,
+  });
+
+  console.log(
+    "🔥 /api/beacons 층 정보 =",
+    beacons.map((b) => ({
+      beaconNo: b.beaconNo,
+      beaconId: b.beaconId,
+      floorIndex: b.floorIndex,
+      x: b.x,
+      y: b.y,
+    })),
+  );
+
+  console.log("🔥 beaconMappings =", beaconMappings);
+
+  const markers = useMemo(() => {
+    const result = beacons
+      .filter((beacon) => {
+        return Number(beacon.floorIndex) === Number(currentFloorNumber);
+      })
+      .map((beacon) => {
+        const beaconId = String(beacon?.beaconId || "");
+
+        // ✅ 학생 감지 정보
+        const monitoringMarker = monitoringMarkers.find(
+          (marker) => String(marker?.beaconId || "") === beaconId,
+        );
+
+        // ✅ 백엔드가 자동 갱신한 방/구역 매핑
+        const mapping = beaconMappings.find(
+          (item) => String(item?.beaconId || "") === beaconId,
+        );
+
+        return {
+          // =========================
+          // 실제 비콘
+          // =========================
+          beaconId: beacon.beaconId,
+          beaconNo: beacon.beaconNo,
+
+          uuid: beacon.uuid,
+          major: beacon.major,
+          minor: beacon.minor,
+          name: beacon.name,
+
+          floorIndex: Number(beacon.floorIndex),
+
+          // ★ 위치는 무조건 /api/beacons
+          x: Number(beacon.x),
+          y: Number(beacon.y),
+
+          // =========================
+          // 방 / 구역 매핑
+          // =========================
+          elementId: mapping?.elementId ?? monitoringMarker?.elementId ?? null,
+
+          zoneElementId:
+            mapping?.zoneElementId ??
+            mapping?.elementId ??
+            monitoringMarker?.zoneElementId ??
+            monitoringMarker?.elementId ??
+            null,
+
+          placementName:
+            mapping?.placementName ?? monitoringMarker?.placementName ?? "",
+
+          zoneType: mapping?.zoneType ?? monitoringMarker?.zoneType ?? null,
+
+          thresholdRssi:
+            mapping?.thresholdRssi ?? monitoringMarker?.thresholdRssi ?? -85,
+
+          isActive: mapping?.isActive ?? monitoringMarker?.isActive ?? true,
+
+          // =========================
+          // 학생 감지
+          // =========================
+          studentCount: monitoringMarker?.studentCount ?? 0,
+
+          students: monitoringMarker?.students ?? [],
+        };
+      })
+      .filter((marker) => marker.isActive !== false);
+
+    console.log("🔥🔥🔥 [Monitoring] 최종 markers =", result);
+
+    return result;
+  }, [beacons, beaconMappings, monitoringMarkers, currentFloorNumber]);
   // ✅ monitoring-map이 갱신되면 선택 중인 비콘 상세 정보도 최신 값으로 교체
   useEffect(() => {
     setSelectedMarker((prev) => {
       if (!prev) return null;
 
-      const getKey = (marker) =>
-        marker?.beaconId ||
-        marker?.beaconElementId ||
-        marker?.zoneElementId ||
-        marker?.elementId ||
-        "";
+      const prevKey = getMarkerKey(prev);
 
-      const latestMarker = (selectedFloor?.beaconMarkers || [])
-        .filter((marker) => marker.isActive !== false)
-        .find((marker) => getKey(marker) === getKey(prev));
+      const latestMarker = markers.find(
+        (marker) => getMarkerKey(marker) === prevKey,
+      );
 
       return latestMarker || null;
     });
-  }, [selectedFloor]);
+  }, [markers]);
 
   // 구조도에 저장된 실제 비콘 설치 위치
-  const beaconElements = (selectedFloor?.elements || []).filter((el) => {
-    const type = String(el.elementType || el.type || "").toUpperCase();
-
-    return type === "BEACON" || el.type === "비콘";
-  });
-
   const getMarkerPosition = (marker) => {
-    // ✅ 1순위: 구조도에 저장된 실제 비콘 요소의 좌표 사용
-    const matchedBeacon = beaconElements.find((element) => {
-      const elementBeaconId = String(
-        element?.serverBeaconId || element?.beaconId || "",
-      );
+    if (
+      marker?.x === null ||
+      marker?.x === undefined ||
+      marker?.y === null ||
+      marker?.y === undefined
+    ) {
+      console.warn("[Monitoring] 실제 비콘 좌표 없음 =", marker);
 
-      const markerBeaconId = String(marker?.beaconId || "");
-
-      return (
-        elementBeaconId && markerBeaconId && elementBeaconId === markerBeaconId
-      );
-    });
-
-    if (matchedBeacon) {
-      return {
-        x: Number(matchedBeacon.x || 0) + Number(matchedBeacon.width || 0) / 2,
-        y: Number(matchedBeacon.y || 0) + Number(matchedBeacon.height || 0) / 2,
-      };
+      return null;
     }
 
-    // ✅ 2순위: monitoring-map 응답의 좌표 사용
-    const markerX = Number(marker?.x);
-    const markerY = Number(marker?.y);
+    const x = Number(marker.x);
+    const y = Number(marker.y);
 
-    if (Number.isFinite(markerX) && Number.isFinite(markerY)) {
-      return {
-        x: markerX,
-        y: markerY,
-      };
-    }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      console.warn("[Monitoring] 잘못된 실제 비콘 좌표 =", marker);
 
-    // ✅ 3순위: 좌표를 찾지 못한 경우에만 연결 구역 중앙 사용
-    const zoneId = marker?.zoneElementId || marker?.elementId;
-
-    const matchedZone = (selectedFloor?.elements || []).find((element) => {
-      return String(element?.id || "") === String(zoneId || "");
-    });
-
-    if (matchedZone) {
-      return {
-        x: Number(matchedZone.x || 0) + Number(matchedZone.width || 0) / 2,
-        y: Number(matchedZone.y || 0) + Number(matchedZone.height || 0) / 2,
-      };
+      return null;
     }
 
     return {
-      x: 0,
-      y: 0,
+      x,
+      y,
     };
   };
 
@@ -1187,6 +1394,10 @@ export default function Monitoring() {
                 {/* markers */}
                 {markers.map((marker) => {
                   const position = getMarkerPosition(marker);
+
+                  if (!position) {
+                    return null;
+                  }
 
                   const left = toPercentX(position.x);
                   const top = toPercentY(position.y);

@@ -1390,41 +1390,18 @@ export default function SchoolSetting() {
         txPower: Number(serverBeacon.txPower ?? 0),
       };
 
-      // ✅ 이동한 새 위치가 어느 구역에 들어가는지 확인
-      const movedBeacon = {
-        x: Number(pendingBeaconNat.x),
-        y: Number(pendingBeaconNat.y),
-      };
-      const movedZone = findActiveMapZoneForBeacon(
-        movedBeacon,
-        serverFloorIndex,
-      );
-
+      // ✅ 비콘 위치만 전달
+      // 방/구역 매핑은 백엔드가 active map + x/y 기준으로 자동 계산
       const placementPayload = {
         floorIndex: Number(serverFloorIndex),
         x: Number(pendingBeaconNat.x),
         y: Number(pendingBeaconNat.y),
+
+        thresholdRssi: -85,
+        isActive: true,
       };
 
-      // ✅ 구역 안으로 이동했을 때만 대표 구역도 변경
-      if (movedZone) {
-        const normalizedZoneType = normalizeElementType(
-          movedZone.zoneType || movedZone.elementType || movedZone.type,
-        );
-
-        placementPayload.zoneElementId = movedZone.id;
-
-        placementPayload.placementName =
-          movedZone.name || movedZone.placementName || "";
-
-        placementPayload.zoneType = normalizedZoneType;
-
-        placementPayload.thresholdRssi = -85;
-        placementPayload.isActive = true;
-      }
-
-      console.log("🔥 비콘 정보 수정 payload =", beaconUpdatePayload);
-      console.log("비콘 placement 수정 payload =", placementPayload);
+      console.log("🔥 비콘 위치 수정 PATCH payload =", placementPayload);
 
       // ✅ 1. UUID / Major / Minor 등 비콘 정보 수정
       const infoUpdated = await updateBeaconOnServer(
@@ -1482,59 +1459,26 @@ export default function SchoolSetting() {
       return;
     }
 
-    // ✅ 구조도 JSON에 비콘을 넣지는 않음.
-    // 위치 판정에 사용할 임시 객체만 만든다.
-    const newBeacon = {
-      beaconId: createdBeaconId,
-      x: Number(pendingBeaconNat.x),
-      y: Number(pendingBeaconNat.y),
-      floorIndex: Number(serverFloorIndex),
-    };
+    // ✅ 신규 등록 후 위치 PATCH를 한 번 호출
+    // 백엔드가 이 좌표가 속한 방/구역을 자동 탐색하여 매핑
+    const placementUpdated = await updateBeaconPlacementOnServer(
+      createdBeaconId,
+      {
+        floorIndex: Number(serverFloorIndex),
+        x: Number(pendingBeaconNat.x),
+        y: Number(pendingBeaconNat.y),
 
-    // ✅ 매핑 API에는 editor state가 아니라
-    // 서버 active map의 최신 elementId만 사용
-    const autoZone = findActiveMapZoneForBeacon(newBeacon, serverFloorIndex);
+        thresholdRssi: -85,
+        isActive: true,
+      },
+    );
 
-    console.log("🔥 신규 비콘 자동 구역 판정 =", {
-      floorIdx,
-      serverFloorIndex,
-      beaconX: newBeacon.x,
-      beaconY: newBeacon.y,
-      zoneId: autoZone?.id ?? null,
-      zoneType:
-        autoZone?.zoneType ?? autoZone?.elementType ?? autoZone?.type ?? null,
-      zoneName: autoZone?.name ?? autoZone?.placementName ?? null,
-    });
+    console.log("🔥 신규 비콘 위치/자동 매핑 PATCH 응답 =", placementUpdated);
 
-    if (autoZone) {
-      const mapped = await createBeaconElementMapAuto({
-        beaconId: createdBeaconId,
-        zoneElementId: autoZone.id,
-        floorIndex: serverFloorIndex,
-      });
+    await fetchBeacons();
+    await fetchBeaconElementMaps();
 
-      if (!mapped) {
-        await fetchBeacons();
-
-        alert(
-          `✅ 비콘 ${created.beaconNo ?? nextBeaconNo}번은 등록되었습니다.\n` +
-            "구역 매핑은 아직 완료되지 않았습니다.",
-        );
-      } else {
-        await fetchBeacons();
-        await fetchBeaconElementMaps();
-
-        alert(
-          `✅ 비콘 ${created.beaconNo ?? nextBeaconNo}번이 등록되었습니다.`,
-        );
-      }
-    } else {
-      await fetchBeacons();
-
-      alert(
-        `✅ 비콘 ${created.beaconNo ?? nextBeaconNo}번이 등록되었습니다.\n`,
-      );
-    }
+    alert(`✅ 비콘 ${created.beaconNo ?? nextBeaconNo}번이 등록되었습니다.`);
 
     setIsBeaconModalOpen(false);
     setPendingBeaconNat(null);
@@ -4503,24 +4447,47 @@ export default function SchoolSetting() {
           beacon.y,
         );
 
-        const updated = await updateBeaconPlacementOnServer(beacon.beaconId, {
-          floorIndex: Number(beacon.floorIndex),
+        const serverFloorIndex = Number(beacon.floorIndex);
+
+        // ✅ 좌표만 저장
+        // zoneElementId를 보내지 않으면 백엔드가
+        // active map에서 현재 좌표가 포함된 방/구역을 자동 탐색
+        const placementPayload = {
+          floorIndex: serverFloorIndex,
 
           x: Number(beacon.x),
           y: Number(beacon.y),
 
           thresholdRssi: -85,
           isActive: true,
-        });
+        };
+
+        console.log("🔥 비콘 드래그 PATCH payload =", placementPayload);
+
+        const updated = await updateBeaconPlacementOnServer(
+          beacon.beaconId,
+          placementPayload,
+        );
+
+        console.log("🔥 비콘 드래그 PATCH 응답 =", updated);
+
+        if (!updated) {
+          console.error("비콘 드래그 위치 저장 실패 =", beacon.beaconId);
+        }
 
         if (!updated) {
           console.error("비콘 드래그 위치 저장 실패 =", beacon.beaconId);
         }
       }
 
-      // ✅ 저장 후 서버 좌표 다시 동기화
       if (draggedBeacons.length > 0) {
+        // ✅ 실제 비콘 좌표 다시 조회
         await fetchBeacons();
+
+        // ✅ PATCH가 자동 갱신한 매핑 다시 조회
+        await fetchBeaconElementMaps();
+
+        console.log("🔥 드래그 완료 - 비콘/매핑 최신 데이터 재조회");
       }
     }
 
@@ -4546,6 +4513,12 @@ export default function SchoolSetting() {
     beaconList,
     updateBeaconPlacementOnServer,
     fetchBeacons,
+
+    // ✅ 추가
+    findActiveMapZoneForBeacon,
+    activeMapVersionId,
+    syncBeaconMappings,
+    logMonitoringMapAfterSync,
   ]);
   useEffect(() => {
     if (!resizing) return;
